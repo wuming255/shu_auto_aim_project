@@ -1,0 +1,6 @@
+/build/
+/sp_vision_25-main/
+*.log
+*.o
+*.a
+core
