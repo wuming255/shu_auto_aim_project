@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio)
+
 add_library(srm_serial STATIC
   src/third_party/serial/src/serial.cc
   src/third_party/serial/src/impl/unix.cc
@@ -34,6 +36,22 @@ target_include_directories(srm_protocol
 )
 
 target_compile_options(srm_protocol PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
+add_library(srm_frame_source STATIC
+  src/io/frame_source.cpp
+)
+
+target_include_directories(srm_frame_source
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_frame_source PUBLIC ${OpenCV_LIBS})
+
+target_compile_options(srm_frame_source PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
@@ -75,4 +93,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_transport_test COMMAND srm_transport_test)
+
+  add_executable(srm_frame_source_test
+    tests/frame_source_test.cpp
+  )
+  target_link_libraries(srm_frame_source_test PRIVATE srm_frame_source)
+  target_compile_options(srm_frame_source_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_frame_source_test COMMAND srm_frame_source_test)
 endif()
