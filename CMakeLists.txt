@@ -55,6 +55,22 @@ target_compile_options(srm_frame_source PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_traditional_detector STATIC
+  src/vision/traditional_detector.cpp
+)
+
+target_include_directories(srm_traditional_detector
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_traditional_detector PUBLIC ${OpenCV_LIBS})
+
+target_compile_options(srm_traditional_detector PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 add_library(srm_transport STATIC
   src/io/self_aim_transport.cpp
 )
@@ -102,4 +118,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_frame_source_test COMMAND srm_frame_source_test)
+
+  add_executable(srm_traditional_detector_test
+    tests/traditional_detector_test.cpp
+  )
+  target_link_libraries(srm_traditional_detector_test PRIVATE srm_traditional_detector)
+  target_compile_options(srm_traditional_detector_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_traditional_detector_test COMMAND srm_traditional_detector_test)
 endif()
