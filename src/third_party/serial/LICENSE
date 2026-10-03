@@ -1,0 +1,5 @@
+The serial implementation in this directory is reused from
+sp_vision_25-main/io/serial and remains under its original MIT licenses.
+
+Copyright (c) 2012 William Woodall, John Harrison
+Copyright (c) 2025 TongjiSuperPower (reference project distribution)
