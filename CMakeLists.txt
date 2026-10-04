@@ -127,6 +127,24 @@ target_compile_options(srm_target_tracker PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_aim_compensator STATIC
+  src/control/aim_compensator.cpp
+)
+
+target_include_directories(srm_aim_compensator
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(srm_aim_compensator
+  PUBLIC
+    srm_target_tracker
+)
+
+target_compile_options(srm_aim_compensator PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 add_library(srm_transport STATIC
   src/io/self_aim_transport.cpp
 )
@@ -210,4 +228,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_target_tracker_test COMMAND srm_target_tracker_test)
+
+  add_executable(srm_aim_compensator_test
+    tests/aim_compensator_test.cpp
+  )
+  target_link_libraries(srm_aim_compensator_test PRIVATE srm_aim_compensator)
+  target_compile_options(srm_aim_compensator_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_aim_compensator_test COMMAND srm_aim_compensator_test)
 endif()
