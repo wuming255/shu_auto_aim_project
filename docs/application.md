@@ -89,3 +89,53 @@ error
 `frame_time_us` 是 `steady_clock` 时间点相对于其时钟 epoch 的微秒值，只适合在同一进程/同一日志内比较延迟，不是 Unix 日历时间。`safety_reasons` 使用 `|` 分隔；包含逗号、引号或换行的字段按照 CSV 规则转义。
 
 CSV 记录用于离线诊断，不应直接作为下位机协议输入。
+
+## 配置文件
+
+命令行支持通过 `--config PATH` 读取简单的 UTF-8 文本配置。格式为一行一个 `key=value`，空行和以 `#` 开头的行会被忽略；不支持隐式未知键，拼写错误会直接报错。
+
+示例：
+
+```text
+# offline replay configuration
+input.type=image
+input.source=sample.png
+input.camera_index=0
+input.loop=false
+
+transport.device=/dev/ttyACM0
+transport.transmit_period_ms=10
+transport.io_timeout_ms=20
+transport.reconnect_ms=100
+
+runtime.dry_run=true
+runtime.log=run.csv
+runtime.max_frames=0
+camera.intrinsics=800,800,320,240
+```
+
+当前支持的键：
+
+- `input.type`
+- `input.source`
+- `input.camera_index`
+- `input.loop`
+- `transport.device`
+- `transport.transmit_period_ms`
+- `transport.io_timeout_ms`
+- `transport.reconnect_ms`
+- `runtime.dry_run`
+- `runtime.log`
+- `runtime.max_frames`
+- `camera.intrinsics`
+
+配置文件先于命令行应用；同名命令行参数覆盖配置文件值。例如：
+
+```bash
+build/srm_auto_aim_app \
+  --config run.conf \
+  --intrinsics 810,810,320,240 \
+  --no-loop
+```
+
+配置文件只负责运行参数，不包含视觉开火许可、协议字段或下位机固件配置；当前入口仍不会生成非零 `fire_flag`。

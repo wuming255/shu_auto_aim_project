@@ -28,6 +28,14 @@ ApplicationOptions parse(std::initializer_list<const char *> arguments)
   return srm::app::parse_arguments(static_cast<int>(argv.size()), argv.data());
 }
 
+ApplicationOptions parse_dynamic(const std::vector<std::string> & arguments)
+{
+  std::vector<const char *> argv;
+  argv.push_back("test_app");
+  for (const auto & argument : arguments) argv.push_back(argument.c_str());
+  return srm::app::parse_arguments(static_cast<int>(argv.size()), argv.data());
+}
+
 void test_command_line_options()
 {
   const auto options = parse({
@@ -86,6 +94,67 @@ void test_command_line_validation()
   assert(help.help);
 }
 
+
+void test_config_file_and_cli_override()
+{
+  const auto path =
+    std::string("/tmp/shu_auto_aim_application_config_") +
+    std::to_string(static_cast<long long>(::getpid())) + ".conf";
+  {
+    std::ofstream output(path);
+    output << "# offline configuration\n"
+           << "input.type=image\n"
+           << "input.source=config.png\n"
+           << "input.loop=true\n"
+           << "input.camera_index=3\n"
+           << "transport.device=/dev/config\n"
+           << "transport.transmit_period_ms=17\n"
+           << "transport.io_timeout_ms=23\n"
+           << "transport.reconnect_ms=31\n"
+           << "runtime.dry_run=true\n"
+           << "runtime.log=config.csv\n"
+           << "runtime.max_frames=4\n"
+           << "camera.intrinsics=700,701,320,240\n";
+  }
+
+  const auto overridden = parse_dynamic({
+    "--config", path, "--source", "cli.png", "--no-loop", "--live", "--max-frames", "8",
+    "--device", "/dev/cli", "--intrinsics", "800,801,320,240"});
+  assert(overridden.config_path == path);
+  assert(overridden.frame_source.type == FrameSourceType::image_file);
+  assert(overridden.frame_source.uri == "cli.png");
+  assert(!overridden.frame_source.loop);
+  assert(overridden.frame_source.camera_index == 3);
+  assert(!overridden.dry_run);
+  assert(overridden.max_frames == 8);
+  assert(overridden.transport.device == "/dev/cli");
+  assert(overridden.transport.transmit_period == std::chrono::milliseconds(17));
+  assert(overridden.transport.io_timeout == std::chrono::milliseconds(23));
+  assert(overridden.transport.reconnect_interval == std::chrono::milliseconds(31));
+  assert(overridden.intrinsics_set);
+  assert(overridden.fx == 800.0 && overridden.fy == 801.0);
+  assert(overridden.log_path == "config.csv");
+
+  const auto config_only = parse_dynamic({"--config", path});
+  assert(config_only.dry_run);
+  assert(config_only.frame_source.loop);
+  assert(config_only.max_frames == 4);
+  assert(config_only.fx == 700.0 && config_only.fy == 701.0);
+
+  bool unknown_key = false;
+  {
+    std::ofstream output(path);
+    output << "not_a_supported_key=value\n";
+  }
+  try {
+    (void)parse_dynamic({"--config", path});
+  } catch (const std::invalid_argument &) {
+    unknown_key = true;
+  }
+  assert(unknown_key);
+  ::unlink(path.c_str());
+}
+
 void test_runtime_csv_logger()
 {
   const auto path =
@@ -141,6 +210,7 @@ int main()
 {
   test_command_line_options();
   test_command_line_validation();
+  test_config_file_and_cli_override();
   test_runtime_csv_logger();
   return 0;
 }
