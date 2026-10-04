@@ -226,6 +226,7 @@ target_compile_options(srm_auto_aim_runtime PRIVATE
 add_library(srm_app_support STATIC
   src/app/application_options.cpp
   src/app/runtime_csv_logger.cpp
+  src/app/runtime_statistics.cpp
 )
 
 target_include_directories(srm_app_support
@@ -365,4 +366,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_application_support_test COMMAND srm_application_support_test)
+
+  add_test(
+    NAME srm_application_app_smoke_test
+    COMMAND ${CMAKE_COMMAND}
+      -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+      -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/application_smoke.ppm
+      -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/application_smoke
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_smoke.cmake
+  )
 endif()

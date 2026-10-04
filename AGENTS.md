@@ -31,7 +31,8 @@
 - `docs/architecture.md`：软件分层、数据流和模块职责。
 - `docs/protocol.md`：正式 CDC 协议的实现约束。
 - `docs/development_workflow.md`：开发轮次、验证和安全流程。
-- `docs/application.md`：命令行运行入口、输入模式、安全边界和 CSV 日志字段说明。
+- `docs/application.md`：命令行运行入口、输入模式、安全边界、CSV 日志和运行摘要说明。
+- `docs/deployment.md`：构建、自动化验收、离线回放和现场接入前的交付检查。
 - `dev_log/`：每一轮实际开发完成后的日志，只记录真实完成内容、真实验证结果和未解决问题。
 
 ## 开发流程

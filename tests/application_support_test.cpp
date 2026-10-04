@@ -1,5 +1,6 @@
 #include "app/application_options.hpp"
 #include "app/runtime_csv_logger.hpp"
+#include "app/runtime_statistics.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -15,6 +16,8 @@ namespace
 {
 using srm::app::ApplicationOptions;
 using srm::app::RuntimeCsvLogger;
+using srm::app::RuntimeStatistics;
+using srm::app::RuntimeTransportSnapshot;
 using srm::control::RuntimeStepResult;
 using srm::control::SafetyReason;
 using srm::control::SafetyState;
@@ -42,6 +45,7 @@ void test_command_line_options()
     "--input", "video", "--source", "input.mp4", "--device", "/dev/test",
     "--camera-index", "2", "--loop", "--dry-run", "--max-frames", "7",
     "--intrinsics", "800,801,320,240", "--log", "/tmp/run.csv",
+    "--debug-dir", "/tmp/debug", "--summary", "/tmp/summary.txt", "--debug-every", "3",
     "--transmit-period-ms", "15", "--io-timeout-ms", "22", "--reconnect-ms", "33"});
 
   assert(options.frame_source.type == FrameSourceType::video_file);
@@ -58,6 +62,9 @@ void test_command_line_options()
   assert(options.fx == 800.0 && options.fy == 801.0);
   assert(options.cx == 320.0 && options.cy == 240.0);
   assert(options.log_path == "/tmp/run.csv");
+  assert(options.debug_directory == "/tmp/debug");
+  assert(options.summary_path == "/tmp/summary.txt");
+  assert(options.debug_every == 3);
 
   const auto camera_options = parse({"--input", "camera", "--camera-index", "1"});
   assert(camera_options.frame_source.type == FrameSourceType::opencv_camera);
@@ -90,6 +97,14 @@ void test_command_line_validation()
   }
   assert(unknown_option);
 
+  bool zero_debug_interval = false;
+  try {
+    (void)parse({"--debug-every", "0"});
+  } catch (const std::invalid_argument &) {
+    zero_debug_interval = true;
+  }
+  assert(zero_debug_interval);
+
   const auto help = parse({"--help", "--input", "image"});
   assert(help.help);
 }
@@ -113,13 +128,17 @@ void test_config_file_and_cli_override()
            << "transport.reconnect_ms=31\n"
            << "runtime.dry_run=true\n"
            << "runtime.log=config.csv\n"
+           << "runtime.debug_dir=config_debug\n"
+           << "runtime.summary=config_summary.txt\n"
+           << "runtime.debug_every=5\n"
            << "runtime.max_frames=4\n"
            << "camera.intrinsics=700,701,320,240\n";
   }
 
   const auto overridden = parse_dynamic({
     "--config", path, "--source", "cli.png", "--no-loop", "--live", "--max-frames", "8",
-    "--device", "/dev/cli", "--intrinsics", "800,801,320,240"});
+    "--device", "/dev/cli", "--intrinsics", "800,801,320,240",
+    "--debug-dir", "cli_debug", "--summary", "cli_summary.txt", "--debug-every", "2"});
   assert(overridden.config_path == path);
   assert(overridden.frame_source.type == FrameSourceType::image_file);
   assert(overridden.frame_source.uri == "cli.png");
@@ -134,12 +153,18 @@ void test_config_file_and_cli_override()
   assert(overridden.intrinsics_set);
   assert(overridden.fx == 800.0 && overridden.fy == 801.0);
   assert(overridden.log_path == "config.csv");
+  assert(overridden.debug_directory == "cli_debug");
+  assert(overridden.summary_path == "cli_summary.txt");
+  assert(overridden.debug_every == 2);
 
   const auto config_only = parse_dynamic({"--config", path});
   assert(config_only.dry_run);
   assert(config_only.frame_source.loop);
   assert(config_only.max_frames == 4);
   assert(config_only.fx == 700.0 && config_only.fy == 701.0);
+  assert(config_only.debug_directory == "config_debug");
+  assert(config_only.summary_path == "config_summary.txt");
+  assert(config_only.debug_every == 5);
 
   bool unknown_key = false;
   {
@@ -178,13 +203,15 @@ void test_runtime_csv_logger()
   result.pipeline->aim.yaw_deg = 12.0;
   result.pipeline->aim.pitch_deg = -2.0;
   result.pipeline->aim.bullet_speed_m_s = 20.0;
+  result.step_duration = std::chrono::microseconds(123);
   result.safety.state = SafetyState::aiming;
   result.safety.aim_command_valid = true;
   result.safety.command.gimbal = {12.0F, -2.0F};
   result.safety.reasons = {SafetyReason::fire_disabled};
   result.error = "comma,error";
 
-  logger.log(result);
+  const RuntimeTransportSnapshot transport{4, 5, 6};
+  logger.log(result, transport);
   assert(logger.rows_written() == 1);
 
   std::ifstream input(path);
@@ -192,7 +219,9 @@ void test_runtime_csv_logger()
   contents << input.rdbuf();
   const auto text = contents.str();
   assert(text.find("frame_sequence,frame_read,end_of_stream") == 0);
+  assert(text.find("step_duration_us,transport_sent_frame_count") != std::string::npos);
   assert(text.find("4,1,0,") != std::string::npos);
+  assert(text.find(",123,4,5,6,2,tracking") != std::string::npos);
   assert(text.find("tracking") != std::string::npos);
   assert(text.find("fire_disabled") != std::string::npos);
   assert(text.find("\"comma,error\"") != std::string::npos);
@@ -204,6 +233,53 @@ void test_runtime_csv_logger()
   ::unlink(path.c_str());
 }
 
+void test_runtime_statistics()
+{
+  RuntimeStatistics statistics;
+
+  RuntimeStepResult aiming;
+  aiming.frame_read = true;
+  aiming.step_duration = std::chrono::microseconds(10);
+  aiming.pipeline.emplace();
+  aiming.pipeline->selection.observations.resize(2);
+  aiming.safety.state = SafetyState::aiming;
+  statistics.observe(aiming, RuntimeTransportSnapshot{1, 2, 3});
+
+  RuntimeStepResult failure;
+  failure.error = "processing failed";
+  failure.step_duration = std::chrono::microseconds(20);
+  failure.safety.state = SafetyState::safe;
+  statistics.observe(failure, RuntimeTransportSnapshot{4, 5, 6});
+
+  RuntimeStepResult end;
+  end.end_of_stream = true;
+  end.error = "frame source reached end of stream";
+  end.step_duration = std::chrono::microseconds(30);
+  end.safety.state = SafetyState::safe;
+  statistics.observe(end, RuntimeTransportSnapshot{7, 8, 9});
+
+  const auto & snapshot = statistics.snapshot();
+  assert(snapshot.step_count == 3);
+  assert(snapshot.frame_count == 1);
+  assert(snapshot.end_of_stream_count == 1);
+  assert(snapshot.error_count == 1);
+  assert(snapshot.candidate_count == 2);
+  assert(snapshot.safe_count == 2);
+  assert(snapshot.aiming_count == 1);
+  assert(snapshot.fire_ready_count == 0);
+  assert(snapshot.total_step_duration_us == 60);
+  assert(snapshot.max_step_duration_us == 30);
+  assert(snapshot.transport.sent_frame_count == 7);
+  assert(snapshot.transport.received_frame_count == 8);
+  assert(snapshot.transport.communication_error_count == 9);
+
+  const auto summary = statistics.summary_text();
+  assert(summary.find("step_count=3\n") != std::string::npos);
+  assert(summary.find("candidate_count=2\n") != std::string::npos);
+  assert(summary.find("average_step_duration_us=20") != std::string::npos);
+  assert(summary.find("transport_sent_frame_count=7\n") != std::string::npos);
+}
+
 }  // namespace
 
 int main()
@@ -212,5 +288,6 @@ int main()
   test_command_line_validation();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
+  test_runtime_statistics();
   return 0;
 }

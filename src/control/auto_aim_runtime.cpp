@@ -23,6 +23,7 @@ AutoAimRuntime::AutoAimRuntime(
 
 RuntimeStepResult AutoAimRuntime::step()
 {
+  const auto step_start = std::chrono::steady_clock::now();
   RuntimeStepResult result;
   io::Frame frame;
   if (!frame_source_.read(frame)) {
@@ -36,6 +37,8 @@ RuntimeStepResult AutoAimRuntime::step()
     input.processing_ok = false;
     result.safety = safety_controller_.decide(input);
     transport_.set_command(result.safety.command);
+    result.step_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - step_start);
     return result;
   }
 
@@ -69,6 +72,8 @@ RuntimeStepResult AutoAimRuntime::step()
   input.pipeline_result = result.pipeline.has_value() ? &result.pipeline.value() : nullptr;
   result.safety = safety_controller_.decide(input);
   transport_.set_command(result.safety.command);
+  result.step_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+    std::chrono::steady_clock::now() - step_start);
   return result;
 }
 

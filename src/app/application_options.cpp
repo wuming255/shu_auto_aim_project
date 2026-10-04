@@ -135,6 +135,13 @@ void set_max_frames(ApplicationOptions & options, const std::string & text, cons
   options.max_frames = static_cast<std::size_t>(value);
 }
 
+void set_debug_every(ApplicationOptions & options, const std::string & text, const char * option)
+{
+  const auto value = parse_integer(text, option);
+  if (value <= 0) throw std::invalid_argument(std::string(option) + " must be positive");
+  options.debug_every = static_cast<std::size_t>(value);
+}
+
 void apply_config_entry(
   ApplicationOptions & options, const std::string & key, const std::string & value,
   std::size_t line_number)
@@ -161,8 +168,14 @@ void apply_config_entry(
     options.dry_run = parse_bool(value, context.c_str());
   } else if (key == "runtime.log") {
     options.log_path = value;
+  } else if (key == "runtime.debug_dir") {
+    options.debug_directory = value;
+  } else if (key == "runtime.summary") {
+    options.summary_path = value;
   } else if (key == "runtime.max_frames") {
     set_max_frames(options, value, context.c_str());
+  } else if (key == "runtime.debug_every") {
+    set_debug_every(options, value, context.c_str());
   } else if (key == "camera.intrinsics") {
     parse_intrinsics(options, value, context.c_str());
   } else {
@@ -190,6 +203,9 @@ void validate_options(const ApplicationOptions & options)
       options.transport.io_timeout <= std::chrono::milliseconds::zero() ||
       options.transport.reconnect_interval <= std::chrono::milliseconds::zero()) {
     throw std::invalid_argument("transport timeouts and period must be positive");
+  }
+  if (options.debug_every == 0) {
+    throw std::invalid_argument("debug frame interval must be positive");
   }
 }
 
@@ -302,6 +318,19 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])
       options.log_path = require_value(index, argc, argv, "--log");
       continue;
     }
+    if (argument == "--debug-dir") {
+      options.debug_directory = require_value(index, argc, argv, "--debug-dir");
+      continue;
+    }
+    if (argument == "--summary") {
+      options.summary_path = require_value(index, argc, argv, "--summary");
+      continue;
+    }
+    if (argument == "--debug-every") {
+      set_debug_every(
+        options, require_value(index, argc, argv, "--debug-every"), "--debug-every");
+      continue;
+    }
     if (argument == "--max-frames") {
       set_max_frames(
         options, require_value(index, argc, argv, "--max-frames"), "--max-frames");
@@ -351,6 +380,9 @@ std::string usage(const char * program_name)
     << "  --device PATH               USB CDC device (default: /dev/ttyACM0)\n"
     << "  --intrinsics fx,fy,cx,cy    camera intrinsic parameters\n"
     << "  --log PATH                  write CSV runtime log\n"
+    << "  --summary PATH              write key=value replay summary\n"
+    << "  --debug-dir PATH            save detector debug images\n"
+    << "  --debug-every N             save every Nth frame (default: 1)\n"
     << "  --max-frames N              stop after N frames; 0 means no limit\n"
     << "  --loop/--no-loop            enable or disable image/video looping\n"
     << "  --dry-run/--live            disable or enable transport startup\n"

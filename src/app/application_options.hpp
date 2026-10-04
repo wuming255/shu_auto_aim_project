@@ -20,7 +20,10 @@ struct ApplicationOptions
   bool help = false;
   std::string config_path;
   std::string log_path;
+  std::string debug_directory;
+  std::string summary_path;
   std::size_t max_frames = 0;  // 0 表示直到 EOF 或收到停止信号。
+  std::size_t debug_every = 1;  // 每隔多少帧保存一张 debug 图像。
 
   // 没有提供标定内参时保留 PoseSolver 的默认矩阵，并由主程序打印提示。
   bool intrinsics_set = false;

@@ -2,6 +2,7 @@
 #define SHU_AUTO_AIM_AUTO_AIM_RUNTIME_HPP
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -21,6 +22,8 @@ struct RuntimeStepResult
   bool frame_read = false;
   bool end_of_stream = false;
   std::string error;
+  // 本次 step 从读取帧开始到安全命令写入 transport 的单调耗时。
+  std::chrono::microseconds step_duration{0};
 
   std::optional<io::Frame> frame;
   std::optional<AutoAimFrameResult> pipeline;

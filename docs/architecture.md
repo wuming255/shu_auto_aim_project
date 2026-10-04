@@ -17,7 +17,7 @@
 - `src/protocol/`：正式自瞄协议编码、解码和流式解析。
 - `src/io/self_aim_transport.*`：正式协议串口收发、后台线程和重连。
 - `src/io/frame_source.*`：图片、视频和 OpenCV camera index 输入抽象，统一输出 BGR 图像、单调时间戳、序号和文件源时间。
-- `src/app/`：命令行运行入口支持、CSV 运行日志和离线 smoke test 入口。
+- `src/app/`：命令行运行入口、配置文件、CSV 运行日志、运行统计、debug 图像和离线 smoke test 入口。
 - `tests/`：协议、传输层伪终端、输入抽象、阶段七闭环和应用支持测试。
 
 本阶段的输入抽象不绑定海康 MVS SDK，现场工业相机适配器后续在相同的帧接口上接入。第一轮不复制参考项目完整视觉业务，避免把参考项目旧通信协议和不必要的兵种逻辑带入本项目。
@@ -142,3 +142,12 @@
 - `src/app/application_options.*` 在命令行参数之上增加简单 `key=value` 配置文件；配置文件先应用，命令行后应用，以便现场脚本保留稳定基础参数并临时覆盖输入、内参或日志路径。
 - 配置解析拒绝未知键、缺少等号、非法布尔值、非法数值和缺少图片/视频源，避免拼写错误静默改变运行行为。
 - 配置文件只描述上位机运行参数，不承载正式 CDC 帧字段、视觉开火许可、下位机配置或未经确认的现场标定结果。
+
+## 集成验证与运行报告层（阶段八后续轮次）
+
+- `src/app/runtime_statistics.*` 在不改变算法和协议接口的前提下，按 `AutoAimRuntime::step()` 累计输入帧、EOF、处理错误、候选数量、安全状态、处理耗时和 transport 计数。
+- `RuntimeStepResult::step_duration` 使用 `steady_clock` 记录从本次 `step()` 开始到安全命令写入 transport 的单调耗时；该值用于诊断，不作为控制时钟或协议字段。
+- `RuntimeCsvLogger` 在原有诊断字段基础上追加 `step_duration_us` 和三个累计 `transport_*` 字段；CSV 仍是诊断输出，不作为正式 CDC 输入。
+- `srm_auto_aim_app` 可按 `--debug-every` 将 `TraditionalDetector::draw_debug()` 的结果保存到 `--debug-dir`，并按 `--summary` 写出稳定的 key=value 运行摘要。目录创建、图像写入和摘要写入失败会报告错误。
+- 当前应用的 debug、CSV 和 summary 输出均可在 `--dry-run` 下使用；未启动 transport 时安全状态保持非开火，摘要中的 `nonzero_fire_request_count` 应为 0。
+- 运行统计只用于观测和交付准备，不会改变目标选择、预测、弹道补偿、安全状态机或正式 18 字节/30 字节 CDC 帧布局。真实相机、标定、CDC、云台和发射验证仍统一放在 `questions.md`。

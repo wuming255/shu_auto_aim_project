@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 
+#include "app/runtime_statistics.hpp"
 #include "control/auto_aim_runtime.hpp"
 
 namespace srm::app
@@ -19,7 +20,9 @@ public:
   RuntimeCsvLogger(const RuntimeCsvLogger &) = delete;
   RuntimeCsvLogger & operator=(const RuntimeCsvLogger &) = delete;
 
-  void log(const control::RuntimeStepResult & result);
+  void log(
+    const control::RuntimeStepResult & result,
+    const RuntimeTransportSnapshot & transport = {});
 
   bool enabled() const noexcept;
   std::size_t rows_written() const noexcept;

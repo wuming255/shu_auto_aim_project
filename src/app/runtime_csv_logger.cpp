@@ -19,7 +19,8 @@ RuntimeCsvLogger::RuntimeCsvLogger(std::string path) : path_(std::move(path))
   write_header();
 }
 
-void RuntimeCsvLogger::log(const control::RuntimeStepResult & result)
+void RuntimeCsvLogger::log(
+  const control::RuntimeStepResult & result, const RuntimeTransportSnapshot & transport)
 {
   if (!enabled()) return;
 
@@ -32,7 +33,10 @@ void RuntimeCsvLogger::log(const control::RuntimeStepResult & result)
       result.frame->timestamp.time_since_epoch()).count();
     stream_ << timestamp_us << ',' << std::setprecision(17) << result.frame->source_time_seconds;
   }
-  stream_ << ',';
+  stream_ << ',' << result.step_duration.count() << ','
+          << transport.sent_frame_count << ','
+          << transport.received_frame_count << ','
+          << transport.communication_error_count << ',';
 
   if (result.pipeline.has_value()) {
     const auto & pipeline = result.pipeline.value();
@@ -102,8 +106,10 @@ std::string RuntimeCsvLogger::join_reasons(const control::SafetyOutput & safety)
 void RuntimeCsvLogger::write_header()
 {
   stream_ << "frame_sequence,frame_read,end_of_stream,frame_time_us,source_time_seconds,"
-             "candidate_count,track_state,aim_valid,yaw_deg,pitch_deg,bullet_speed_m_s,"
-             "safety_state,aim_command_valid,fire_allowed,fire_flag,safety_reasons,error\n";
+             "step_duration_us,transport_sent_frame_count,transport_received_frame_count,"
+             "transport_communication_error_count,candidate_count,track_state,aim_valid,yaw_deg,"
+             "pitch_deg,bullet_speed_m_s,safety_state,aim_command_valid,fire_allowed,fire_flag,"
+             "safety_reasons,error\n";
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed to write runtime log header: " + path_);
 }

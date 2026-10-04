@@ -190,3 +190,22 @@ USB CDC 不依赖传统波特率；当前串口库保留 115200 作为打开设�
 - 配置文件不引入旧协议字段、不修改视觉开火安全策略，默认 `fire_flag=0` 保持不变。
 
 本轮仍不验证真实标定文件、MVS 参数、USB CDC 设备和现场云台行为。
+
+
+## 阶段八后续轮次：集成可观测性与交付准备验收
+
+当前软件集成轮次的无硬件验收标准：
+
+- `RuntimeStatistics` 能统计 step、成功帧、EOF、处理错误、候选数量、安全状态、处理耗时和累计 transport 计数；
+- `RuntimeStepResult::step_duration` 记录从读帧开始到安全命令写入 transport 的单调耗时，不混入协议字段；
+- CSV 日志包含 `step_duration_us`、`transport_sent_frame_count`、`transport_received_frame_count` 和 `transport_communication_error_count`；
+- `--debug-dir` 能创建输出目录并保存 `TraditionalDetector::draw_debug()` 生成的图像，`--debug-every N` 能限制保存频率；
+- `--summary PATH` 能在正常离线运行后生成稳定的 key=value 摘要，包含处理帧、耗时、安全状态、开火请求和 transport 统计；
+- 配置文件和命令行均支持 `runtime.debug_dir`、`runtime.summary`、`runtime.debug_every`，其中 `debug_every=0` 必须拒绝；
+- 离线 dry-run 同时启用 debug、CSV 和 summary 时可完成，且 `nonzero_fire_request_count=0`、所有输出中的 `fire_flag=0`；
+- 输出写入失败时程序报告错误，传输对象通过析构路径停止后台线程；
+- CTest 集成 smoke test 能自动启动 `srm_auto_aim_app`，检查 debug 图像、CSV、summary 和 `fire_flag=0`；
+- `docs/deployment.md` 能指导构建、离线回放和交付前检查；
+- 不接入真实 MVS、真实 CDC、云台、标定或发射，不把离线 synthetic image 结果当作现场效果。
+
+该轮验收只证明软件主体的集成可观测性和交付准备接口，不替代根目录 `questions.md` 中的最终现场验证。
