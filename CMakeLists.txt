@@ -145,6 +145,25 @@ target_compile_options(srm_aim_compensator PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_auto_aim_pipeline STATIC
+  src/control/auto_aim_pipeline.cpp
+)
+
+target_include_directories(srm_auto_aim_pipeline
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_auto_aim_pipeline
+  PUBLIC
+    srm_aim_compensator
+)
+
+target_compile_options(srm_auto_aim_pipeline PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 add_library(srm_transport STATIC
   src/io/self_aim_transport.cpp
 )
@@ -237,4 +256,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_aim_compensator_test COMMAND srm_aim_compensator_test)
+
+  add_executable(srm_auto_aim_pipeline_test
+    tests/auto_aim_pipeline_test.cpp
+  )
+  target_link_libraries(srm_auto_aim_pipeline_test PRIVATE srm_auto_aim_pipeline)
+  target_compile_options(srm_auto_aim_pipeline_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_auto_aim_pipeline_test COMMAND srm_auto_aim_pipeline_test)
 endif()
