@@ -107,6 +107,26 @@ target_compile_options(srm_target_selector PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_target_tracker STATIC
+  src/vision/target_tracker.cpp
+)
+
+target_include_directories(srm_target_tracker
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_target_tracker
+  PUBLIC
+    srm_target_selector
+    ${OpenCV_LIBS}
+)
+
+target_compile_options(srm_target_tracker PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 add_library(srm_transport STATIC
   src/io/self_aim_transport.cpp
 )
@@ -181,4 +201,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_target_selector_test COMMAND srm_target_selector_test)
+
+  add_executable(srm_target_tracker_test
+    tests/target_tracker_test.cpp
+  )
+  target_link_libraries(srm_target_tracker_test PRIVATE srm_target_tracker)
+  target_compile_options(srm_target_tracker_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_target_tracker_test COMMAND srm_target_tracker_test)
 endif()
