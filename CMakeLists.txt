@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio)
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d)
 
 add_library(srm_serial STATIC
   src/third_party/serial/src/serial.cc
@@ -71,6 +71,42 @@ target_compile_options(srm_traditional_detector PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_pose_solver STATIC
+  src/vision/pose_solver.cpp
+)
+
+target_include_directories(srm_pose_solver
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_pose_solver PUBLIC ${OpenCV_LIBS})
+
+target_compile_options(srm_pose_solver PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
+add_library(srm_target_selector STATIC
+  src/vision/target_selector.cpp
+)
+
+target_include_directories(srm_target_selector
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_target_selector
+  PUBLIC
+    srm_pose_solver
+    ${OpenCV_LIBS}
+)
+
+target_compile_options(srm_target_selector PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 add_library(srm_transport STATIC
   src/io/self_aim_transport.cpp
 )
@@ -127,4 +163,22 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_traditional_detector_test COMMAND srm_traditional_detector_test)
+
+  add_executable(srm_pose_solver_test
+    tests/pose_solver_test.cpp
+  )
+  target_link_libraries(srm_pose_solver_test PRIVATE srm_pose_solver)
+  target_compile_options(srm_pose_solver_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_pose_solver_test COMMAND srm_pose_solver_test)
+
+  add_executable(srm_target_selector_test
+    tests/target_selector_test.cpp
+  )
+  target_link_libraries(srm_target_selector_test PRIVATE srm_target_selector)
+  target_compile_options(srm_target_selector_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_target_selector_test COMMAND srm_target_selector_test)
 endif()
