@@ -17,7 +17,8 @@
 - `src/protocol/`：正式自瞄协议编码、解码和流式解析。
 - `src/io/self_aim_transport.*`：正式协议串口收发、后台线程和重连。
 - `src/io/frame_source.*`：图片、视频和 OpenCV camera index 输入抽象，统一输出 BGR 图像、单调时间戳、序号和文件源时间。
-- `tests/`：协议、传输层伪终端和输入抽象测试。
+- `src/app/`：命令行运行入口支持、CSV 运行日志和离线 smoke test 入口。
+- `tests/`：协议、传输层伪终端、输入抽象、阶段七闭环和应用支持测试。
 
 本阶段的输入抽象不绑定海康 MVS SDK，现场工业相机适配器后续在相同的帧接口上接入。第一轮不复制参考项目完整视觉业务，避免把参考项目旧通信协议和不必要的兵种逻辑带入本项目。
 
@@ -125,3 +126,12 @@
 - `SelfAimTransport::latest_state_timestamp()` 记录最近完整下位机状态帧的单调时间；断链时清除旧状态，避免快速重连且尚未收到新状态时复用旧弹速。
 - `SelfAimTransport::send_command_now()` 用于退出前同步尝试发送确定的安全帧，然后再停止传输线程；周期发送仍由传输线程按正式 CDC 协议执行。
 - 阶段七测试使用 Linux 伪终端、合成下位机状态帧、离线图片输入和合成检测结果，验证了闭环 yaw/pitch 输出、目标丢失、状态过期、EOF、生命周期停止以及全程 `fire_flag=0`。尚未绑定海康 MVS 专用输入，也未进行真实云台或发射测试。
+
+
+## 运行入口与可观测性（阶段八第一轮）
+
+- `src/app/application_options.*` 将输入类型、文件/相机来源、CDC 设备、传输周期、内参、循环、最大帧数和 dry-run 模式解析为可验证配置；不把真实标定值写死在代码中。
+- `src/app/runtime_csv_logger.*` 记录帧序号、帧源时间、候选数量、跟踪状态、数学瞄准结果、安全状态、`fire_flag`、安全原因和错误信息，支持无桌面环境下的离线诊断。
+- `src/app/main.cpp` 使用现有 `TraditionalDetector` 和阶段六/七模块建立 `srm_auto_aim_app`；图片、视频和 OpenCV camera index 共用同一运行路径。
+- `--dry-run` 不启动传输线程，仅用于输入/检测/日志 smoke test；由于安全控制器会看到 transport 未运行，该模式不会输出有效瞄准命令。
+- 当前入口仍不负责加载标定文件、绑定海康 MVS SDK、提供 GUI 或修改视觉开火配置；这些事项保持在后续适配和 `questions.md` 现场验证边界内。

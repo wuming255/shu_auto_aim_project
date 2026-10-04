@@ -223,6 +223,39 @@ target_compile_options(srm_auto_aim_runtime PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_app_support STATIC
+  src/app/application_options.cpp
+  src/app/runtime_csv_logger.cpp
+)
+
+target_include_directories(srm_app_support
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(srm_app_support
+  PUBLIC
+    srm_auto_aim_runtime
+)
+
+target_compile_options(srm_app_support PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
+add_executable(srm_auto_aim_app
+  src/app/main.cpp
+)
+
+target_link_libraries(srm_auto_aim_app
+  PRIVATE
+    srm_app_support
+    srm_traditional_detector
+)
+
+target_compile_options(srm_auto_aim_app PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(srm_protocol_test
@@ -323,4 +356,13 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_auto_aim_runtime_test COMMAND srm_auto_aim_runtime_test)
+
+  add_executable(srm_application_support_test
+    tests/application_support_test.cpp
+  )
+  target_link_libraries(srm_application_support_test PRIVATE srm_app_support)
+  target_compile_options(srm_application_support_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_application_support_test COMMAND srm_application_support_test)
 endif()
