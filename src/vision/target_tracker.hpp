@@ -42,6 +42,12 @@ struct TargetTrackerConfig
   double velocity_smoothing_factor = 1.0;
   // 无穷大表示不按速度做额外拒绝；仍会拒绝非有限速度。
   double max_abs_angular_velocity_rad_s = std::numeric_limits<double>::infinity();
+
+  // 已有跟踪状态时，从本帧所有有效候选中选择最接近当前预测的位置，
+  // 避免单帧选择器因视轴排序而在多个候选间来回跳转。
+  bool use_prediction_association = true;
+  double max_association_angular_error_rad = std::numeric_limits<double>::infinity();
+  double max_association_range_error_m = std::numeric_limits<double>::infinity();
 };
 
 struct TargetTrackEstimate
@@ -105,6 +111,9 @@ private:
   static double elapsed_seconds(
     std::chrono::steady_clock::time_point newer,
     std::chrono::steady_clock::time_point older) noexcept;
+  const TargetObservation * choose_observation(
+    const TargetSelection & selection, std::chrono::steady_clock::time_point timestamp,
+    bool & association_rejected) const noexcept;
 
   void clear_track() noexcept;
   void start_track(const TargetObservation & observation, std::chrono::steady_clock::time_point t);

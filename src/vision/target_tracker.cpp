@@ -50,6 +50,7 @@ TargetTrackEstimate TargetTracker::update(
 {
   bool reset_due_to_time_gap = false;
   std::string status;
+  bool association_rejected = false;
 
   if (has_update_timestamp_) {
     const double update_dt = elapsed_seconds(timestamp, last_update_timestamp_);
@@ -62,15 +63,15 @@ TargetTrackEstimate TargetTracker::update(
   last_update_timestamp_ = timestamp;
   has_update_timestamp_ = true;
 
-  const auto * selected = selection.selected();
-  if (selected != nullptr && !valid_measurement(*selected)) selected = nullptr;
+  const auto * selected = choose_observation(selection, timestamp, association_rejected);
 
   if (selected == nullptr) {
     if (!has_measurement_) {
       state_ = TargetTrackState::lost;
       return make_estimate(
         timestamp, false, reset_due_to_time_gap,
-        status.empty() ? "no valid target" : std::move(status));
+        status.empty() ? (association_rejected ? "no associated target" : "no valid target")
+                       : std::move(status));
     }
 
     ++consecutive_misses_;
@@ -251,6 +252,14 @@ void TargetTracker::validate_config(const TargetTrackerConfig & config)
     throw std::invalid_argument(
       "maximum angular velocity must be finite and non-negative or +inf");
   }
+  if (!valid_non_negative_limit(config.max_association_angular_error_rad)) {
+    throw std::invalid_argument(
+      "maximum association angular error must be finite and non-negative or +inf");
+  }
+  if (!valid_non_negative_limit(config.max_association_range_error_m)) {
+    throw std::invalid_argument(
+      "maximum association range error must be finite and non-negative or +inf");
+  }
 }
 
 bool TargetTracker::valid_measurement(const TargetObservation & observation) noexcept
@@ -268,6 +277,73 @@ double TargetTracker::elapsed_seconds(
   std::chrono::steady_clock::time_point older) noexcept
 {
   return std::chrono::duration<double>(newer - older).count();
+}
+
+const TargetObservation * TargetTracker::choose_observation(
+  const TargetSelection & selection, std::chrono::steady_clock::time_point timestamp,
+  bool & association_rejected) const noexcept
+{
+  association_rejected = false;
+
+  const auto * initially_selected = selection.selected();
+  if (!has_measurement_ || !config_.use_prediction_association) {
+    return initially_selected != nullptr && valid_measurement(*initially_selected)
+             ? initially_selected
+             : nullptr;
+  }
+
+  double predicted_yaw = unwrapped_yaw_rad_;
+  double predicted_pitch = measured_pitch_rad_;
+  double predicted_range = measured_range_m_;
+  const double age_seconds = elapsed_seconds(timestamp, last_measurement_timestamp_);
+  const bool prediction_age_valid =
+    finite(age_seconds) && age_seconds >= 0.0 &&
+    age_seconds <= config_.max_prediction_age_seconds;
+  if (prediction_age_valid && velocity_valid_) {
+    predicted_yaw += yaw_velocity_rad_s_ * age_seconds;
+    predicted_pitch += pitch_velocity_rad_s_ * age_seconds;
+    predicted_range += range_velocity_m_s_ * age_seconds;
+  }
+  if (!finite(predicted_yaw) || !finite(predicted_pitch) || !finite(predicted_range)) {
+    return initially_selected != nullptr && valid_measurement(*initially_selected)
+             ? initially_selected
+             : nullptr;
+  }
+
+  const TargetObservation * best = nullptr;
+  double best_angular_error = std::numeric_limits<double>::infinity();
+  double best_range_error = std::numeric_limits<double>::infinity();
+  std::size_t best_detection_index = std::numeric_limits<std::size_t>::max();
+
+  for (const auto & candidate : selection.observations) {
+    if (!valid_measurement(candidate)) continue;
+
+    const double yaw_error = wrap_angle(candidate.pose.yaw_rad - wrap_angle(predicted_yaw));
+    const double pitch_error = candidate.pose.pitch_rad - predicted_pitch;
+    const double angular_error = std::hypot(yaw_error, pitch_error);
+    const double range_error = std::abs(candidate.pose.range_m - predicted_range);
+    if (!finite(angular_error) || !finite(range_error)) continue;
+    if (angular_error > config_.max_association_angular_error_rad ||
+        range_error > config_.max_association_range_error_m) {
+      association_rejected = true;
+      continue;
+    }
+
+    const bool better =
+      angular_error < best_angular_error ||
+      (angular_error == best_angular_error && range_error < best_range_error) ||
+      (angular_error == best_angular_error && range_error == best_range_error &&
+       candidate.detection_index < best_detection_index);
+    if (better) {
+      best = &candidate;
+      best_angular_error = angular_error;
+      best_range_error = range_error;
+      best_detection_index = candidate.detection_index;
+    }
+  }
+
+  if (best != nullptr) return best;
+  return nullptr;
 }
 
 void TargetTracker::clear_track() noexcept
