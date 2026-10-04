@@ -58,7 +58,13 @@ public:
   void set_command(const protocol::Command & command);
   protocol::Command command() const;
 
+  // 在当前已连接的设备上同步发送一次给定命令，同时更新周期发送命令。
+  // 主要用于退出前发送确定的安全帧；未运行或未连接时返回 false。
+  bool send_command_now(const protocol::Command & command);
+
   std::optional<protocol::IncomingState> latest_state() const;
+  // 最近一次完整状态帧被解析到的单调时间；没有收到过完整帧时返回空。
+  std::optional<std::chrono::steady_clock::time_point> latest_state_timestamp() const;
   std::uint64_t sent_frame_count() const noexcept;
   std::uint64_t received_frame_count() const noexcept;
   std::uint64_t communication_error_count() const noexcept;
@@ -92,6 +98,7 @@ private:
 
   mutable std::mutex state_mutex_;
   std::optional<protocol::IncomingState> latest_state_;
+  std::optional<std::chrono::steady_clock::time_point> latest_state_timestamp_;
   std::string last_error_;
 
   std::atomic<std::uint64_t> sent_frame_count_{0};

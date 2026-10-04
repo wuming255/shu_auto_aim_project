@@ -202,6 +202,9 @@ void test_pty_round_trip_and_safe_default()
   const auto state = transport.latest_state();
   assert(state.has_value());
   assert_state(*state);
+  const auto state_timestamp = transport.latest_state_timestamp();
+  assert(state_timestamp.has_value());
+  assert(std::chrono::steady_clock::now() >= state_timestamp.value());
 
   transport.stop();
   assert(!transport.running());

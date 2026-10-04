@@ -183,6 +183,46 @@ target_compile_options(srm_transport PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+add_library(srm_safety_controller STATIC
+  src/control/safety_controller.cpp
+)
+
+target_include_directories(srm_safety_controller
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_safety_controller
+  PUBLIC
+    srm_auto_aim_pipeline
+)
+
+target_compile_options(srm_safety_controller PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
+add_library(srm_auto_aim_runtime STATIC
+  src/control/auto_aim_runtime.cpp
+)
+
+target_include_directories(srm_auto_aim_runtime
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_auto_aim_runtime
+  PUBLIC
+    srm_safety_controller
+    srm_transport
+    srm_frame_source
+)
+
+target_compile_options(srm_auto_aim_runtime PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(srm_protocol_test
@@ -265,4 +305,22 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_auto_aim_pipeline_test COMMAND srm_auto_aim_pipeline_test)
+
+  add_executable(srm_safety_controller_test
+    tests/safety_controller_test.cpp
+  )
+  target_link_libraries(srm_safety_controller_test PRIVATE srm_safety_controller)
+  target_compile_options(srm_safety_controller_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_safety_controller_test COMMAND srm_safety_controller_test)
+
+  add_executable(srm_auto_aim_runtime_test
+    tests/auto_aim_runtime_test.cpp
+  )
+  target_link_libraries(srm_auto_aim_runtime_test PRIVATE srm_auto_aim_runtime)
+  target_compile_options(srm_auto_aim_runtime_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_auto_aim_runtime_test COMMAND srm_auto_aim_runtime_test)
 endif()

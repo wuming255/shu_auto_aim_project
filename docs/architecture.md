@@ -114,3 +114,14 @@
 - 该接口不负责相机读取、不负责 CDC 收发、不负责云台命令、不负责 `fire_flag` 或安全许可；这些内容属于后续阶段七主循环与安全决策层。
 - 合成旋转序列已覆盖：PnP 逐帧解算、视轴干扰候选、预测关联、跟踪确认、弹道补偿、单帧遮挡、重新捕获和异常弹速。
 - 阶段六的“跟踪、预测与弹道处理”软件垂直切片至此具备可自动化验证的组合接口；当前数学参数和检测算法仍不是现场标定结果。
+
+## 主循环与安全决策层（第七阶段基础版本）
+
+- `src/control/auto_aim_runtime.*` 负责把 `FrameSource`、检测回调、`AutoAimPipeline`、`SafetyController` 和 `SelfAimTransport` 串成单步/持续运行接口。
+- 每次 `step()` 读取一帧并保存帧时间戳，读取当前下位机状态和 `bullet_speed`，调用检测与阶段六垂直管线，再由安全控制器决定是否输出 yaw/pitch；安全决策时刻在帧读取和处理之后取得，避免新帧因时间采样顺序被误判为未来帧。
+- `SafetyController` 的基础状态为 `safe`、`aiming`、`fire_ready`。只有通信运行且已连接、帧和下位机状态未过期、处理成功、目标处于 `tracking`、瞄准有效、传输状态中的 `bullet_speed` 和数学结果中的 `bullet_speed` 均在配置范围内时，才允许输出有效 yaw/pitch。
+- 默认 `allow_visual_fire=false`，所有异常路径和默认路径的 `fire_flag` 均为 0。即使调用方提供视觉开火意图，默认配置也只记录 `fire_disabled`，不会生成非零开火请求；显式开启该配置仍不绕过下位机火控和人工许可。
+- 无效状态下 yaw/pitch 归零并保持 `fire_flag=0`；安全原因以枚举和摘要字符串返回，便于后续运行日志和离线诊断。
+- `SelfAimTransport::latest_state_timestamp()` 记录最近完整下位机状态帧的单调时间；断链时清除旧状态，避免快速重连且尚未收到新状态时复用旧弹速。
+- `SelfAimTransport::send_command_now()` 用于退出前同步尝试发送确定的安全帧，然后再停止传输线程；周期发送仍由传输线程按正式 CDC 协议执行。
+- 阶段七测试使用 Linux 伪终端、合成下位机状态帧、离线图片输入和合成检测结果，验证了闭环 yaw/pitch 输出、目标丢失、状态过期、EOF、生命周期停止以及全程 `fire_flag=0`。尚未绑定海康 MVS 专用输入，也未进行真实云台或发射测试。

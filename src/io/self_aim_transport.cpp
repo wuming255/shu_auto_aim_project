@@ -120,10 +120,47 @@ protocol::Command SelfAimTransport::command() const
   return command_;
 }
 
+bool SelfAimTransport::send_command_now(const protocol::Command & command)
+{
+  set_command(command);
+  if (!running() || !connected() || stop_requested_) return false;
+
+  try {
+    const auto frame = protocol::encode_command(command);
+    std::size_t bytes_written = 0;
+    {
+      std::lock_guard<std::mutex> lock(serial_mutex_);
+      if (!serial_.isOpen()) {
+        connected_ = false;
+        state_changed_.notify_all();
+        return false;
+      }
+      bytes_written = serial_.write(frame);
+    }
+    if (bytes_written != frame.size()) {
+      throw std::runtime_error("serial write timed out before a complete frame was sent");
+    }
+    sent_frame_count_++;
+    return true;
+  } catch (const std::exception & error) {
+    if (!stop_requested_) mark_disconnected(error.what());
+    return false;
+  } catch (...) {
+    if (!stop_requested_) mark_disconnected("unknown serial transmit error");
+    return false;
+  }
+}
+
 std::optional<protocol::IncomingState> SelfAimTransport::latest_state() const
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   return latest_state_;
+}
+
+std::optional<std::chrono::steady_clock::time_point> SelfAimTransport::latest_state_timestamp() const
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return latest_state_timestamp_;
 }
 
 std::uint64_t SelfAimTransport::sent_frame_count() const noexcept
@@ -160,6 +197,13 @@ bool SelfAimTransport::ensure_connected()
 
   try {
     serial_.open();
+    {
+      std::lock_guard<std::mutex> state_lock(state_mutex_);
+      // 每次重新打开设备都要求重新收到一帧完整下位机状态，不能把
+      // 上一次连接的状态带入新的连接周期。
+      latest_state_.reset();
+      latest_state_timestamp_.reset();
+    }
     connected_ = true;
     state_changed_.notify_all();
     return true;
@@ -179,7 +223,14 @@ bool SelfAimTransport::ensure_connected()
 void SelfAimTransport::mark_disconnected(const std::string & error)
 {
   communication_error_count_++;
-  set_last_error(error);
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    // 断链后不能把断链前的下位机状态带过快速重连窗口，否则安全层
+    // 可能在尚未收到新状态帧时误把旧 bullet_speed 当作当前状态。
+    latest_state_.reset();
+    latest_state_timestamp_.reset();
+    last_error_ = error;
+  }
   connected_ = false;
   state_changed_.notify_all();
 
@@ -239,6 +290,7 @@ void SelfAimTransport::receive_loop()
         {
           std::lock_guard<std::mutex> lock(state_mutex_);
           latest_state_ = state;
+          latest_state_timestamp_ = std::chrono::steady_clock::now();
         }
         received_frame_count_++;
       }
