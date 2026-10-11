@@ -17,17 +17,16 @@ namespace srm::control
 
 using DetectionCallback = std::function<vision::DetectionResult(const io::Frame & frame)>;
 
-struct RuntimeStepResult
+struct RuntimeStepResult               // 处理数据汇总struct
 {
-  bool frame_read = false;
-  bool end_of_stream = false;
-  std::string error;
-  // 本次 step 从读取帧开始到安全命令写入 transport 的单调耗时。
-  std::chrono::microseconds step_duration{0};
+  bool frame_read = false;             // 是否成功读到一帧图像
+  bool end_of_stream = false;          // 是否到达输入源末尾
+  std::string error;                   // 错误信息记录
+  std::chrono::microseconds step_duration{0};   // 本次 step 从读取帧开始到安全命令写入 transport 的单调耗时。
 
   std::optional<io::Frame> frame;
   std::optional<AutoAimFrameResult> pipeline;
-  SafetyOutput safety;
+  SafetyOutput safety;            // 安全判断结果
 };
 
 class AutoAimRuntime final
@@ -38,8 +37,8 @@ public:
     AutoAimPipeline pipeline, SafetyController safety_controller,
     DetectionCallback detector);
 
-  AutoAimRuntime(const AutoAimRuntime &) = delete;
-  AutoAimRuntime & operator=(const AutoAimRuntime &) = delete;
+  AutoAimRuntime(const AutoAimRuntime &) = delete;                    // 禁止拷贝构造函数（即禁止这个类被拷贝）
+  AutoAimRuntime & operator=(const AutoAimRuntime &) = delete;        // 禁止拷贝赋值运算符（即禁止这个类被拷贝）
 
   // 执行一次有限步骤，并把安全决策得到的命令写入 transport。
   RuntimeStepResult step();
@@ -48,7 +47,7 @@ public:
   // 退出前发送一次 fire_flag=0 的安全命令并停止 transport。
   void run(std::atomic<bool> & stop_requested);
 
-  AutoAimPipeline & pipeline() noexcept;
+  AutoAimPipeline & pipeline() noexcept;                          // 这些是把pipeline和safetycontroller交给调用者访问以内部操作的函数
   const AutoAimPipeline & pipeline() const noexcept;
   SafetyController & safety_controller() noexcept;
   const SafetyController & safety_controller() const noexcept;

@@ -9,34 +9,38 @@
 
 namespace srm::io
 {
+
+
 namespace
 {
 constexpr auto kTimestampStep = std::chrono::microseconds(1);
 
-void validate_config(const FrameSourceConfig & config)
+void validate_config(const FrameSourceConfig & config)    // 检查配置是否合法
 {
   if (config.width < 0 || config.height < 0) {
     throw std::invalid_argument("frame source width and height must not be negative");
   }
-  if (config.fps < 0.0 || !std::isfinite(config.fps)) {
+  if (config.fps < 0.0 || !std::isfinite(config.fps)) {   // 有限的帧率
     throw std::invalid_argument("frame source fps must be finite and non-negative");
   }
 
   if (
-    (config.type == FrameSourceType::image_file || config.type == FrameSourceType::video_file) &&
+    (config.type == FrameSourceType::image_file || config.type == FrameSourceType::video_file) &&       // 要有文件路径
     config.uri.empty()) {
     throw std::invalid_argument("file frame source uri must not be empty");
   }
 }
 
-bool finite_positive(double value)
+bool finite_positive(double value)        // 检查数字是否有限且大于0
 {
   return std::isfinite(value) && value > 0.0;
 }
 
 }  // namespace
 
-const char * to_string(FrameSourceType type) noexcept
+
+
+const char * to_string(FrameSourceType type) noexcept       // 将输入源类型转换为字符串
 {
   switch (type) {
     case FrameSourceType::image_file:
@@ -56,7 +60,7 @@ FrameSource::FrameSource(FrameSourceConfig config) : config_(std::move(config))
 
   switch (config_.type) {
     case FrameSourceType::image_file:
-      description_ = "image:" + config_.uri;
+      description_ = "image:" + config_.uri;        // 写描述
       break;
     case FrameSourceType::video_file:
       description_ = "video:" + config_.uri;
@@ -80,16 +84,16 @@ FrameSource::~FrameSource()
 void FrameSource::open()
 {
   if (config_.type == FrameSourceType::image_file) {
-    image_ = cv::imread(config_.uri, cv::IMREAD_COLOR);
+    image_ = cv::imread(config_.uri, cv::IMREAD_COLOR);     // 读一帧彩色图片
     if (image_.empty()) {
       throw std::runtime_error("failed to open image frame source: " + config_.uri);
     }
-    open_ = true;
+    open_ = true;                                           // 标记打开成功
     nominal_fps_ = config_.fps;
     return;
   }
 
-  if (config_.type == FrameSourceType::video_file) {
+  if (config_.type == FrameSourceType::video_file) {        // 用OpenCV打开视频文件
     if (!capture_.open(config_.uri, config_.api_preference)) {
       throw std::runtime_error("failed to open video frame source: " + config_.uri);
     }
@@ -99,7 +103,7 @@ void FrameSource::open()
         "failed to open OpenCV camera index " + std::to_string(config_.camera_index));
     }
   }
-
+  // 给 OpenCV VideoCapture 设置采集属性，只有大于0的才设置，0表示使用默认值
   if (config_.width > 0) capture_.set(cv::CAP_PROP_FRAME_WIDTH, config_.width);
   if (config_.height > 0) capture_.set(cv::CAP_PROP_FRAME_HEIGHT, config_.height);
   if (config_.fps > 0.0) capture_.set(cv::CAP_PROP_FPS, config_.fps);
@@ -117,18 +121,18 @@ bool FrameSource::read(Frame & frame)
 
   Frame next;
   bool success = false;
-  if (config_.type == FrameSourceType::image_file) {
+  if (config_.type == FrameSourceType::image_file) {    // 按类型读取帧
     success = read_image(next);
   } else {
     success = read_capture(next);
   }
 
   if (!success) return false;
-  frame = std::move(next);
+  frame = std::move(next);      // 放入下一帧图像
   return true;
 }
 
-bool FrameSource::read(cv::Mat & bgr, std::chrono::steady_clock::time_point & timestamp)
+bool FrameSource::read(cv::Mat & bgr, std::chrono::steady_clock::time_point & timestamp)    // 兼容 CameraBase 的接口的直接读图
 {
   Frame frame;
   if (!read(frame)) return false;
@@ -137,10 +141,10 @@ bool FrameSource::read(cv::Mat & bgr, std::chrono::steady_clock::time_point & ti
   return true;
 }
 
-bool FrameSource::read_image(Frame & frame)
+bool FrameSource::read_image(Frame & frame)     // 输入源为图片时每次read()都会调用read_image()
 {
-  if (image_emitted_) {
-    if (!config_.loop) {
+  if (image_emitted_) {       // 给过调用方吗？
+    if (!config_.loop) {      // 输出过吗？
       end_of_stream_ = true;
       return false;
     }
@@ -159,10 +163,10 @@ bool FrameSource::read_capture(Frame & frame)
 {
   cv::Mat image;
   if (!capture_.read(image) || image.empty()) {
-    if (config_.loop && config_.type == FrameSourceType::video_file) {
+    if (config_.loop && config_.type == FrameSourceType::video_file) {  // 是不是循环播放的视频?
       // 循环播放只回到文件起点，不重置对外 sequence 和 monotonic timestamp。
-      const bool rewound = capture_.set(cv::CAP_PROP_POS_FRAMES, 0.0);
-      if (!rewound || !capture_.read(image) || image.empty()) {
+      const bool rewound = capture_.set(cv::CAP_PROP_POS_FRAMES, 0.0);   // 请求opencv将播放位置设置为第0帧
+      if (!rewound || !capture_.read(image) || image.empty()) {         // 回头设置成功就继续读
         end_of_stream_ = true;
         return false;
       }
@@ -174,8 +178,8 @@ bool FrameSource::read_capture(Frame & frame)
   }
 
   frame.bgr = image.clone();
-  const double position_ms = capture_.get(cv::CAP_PROP_POS_MSEC);
-  if (finite_positive(position_ms)) {
+  const double position_ms = capture_.get(cv::CAP_PROP_POS_MSEC);   // 获取当前帧在视频中的位置，单位为毫秒
+  if (finite_positive(position_ms)) {       // 设置文件源的时间（这帧图像在文件中的时间位置，单位为秒）
     frame.source_time_seconds = position_ms / 1000.0;
   } else if (finite_positive(nominal_fps_)) {
     frame.source_time_seconds = static_cast<double>(next_sequence_) / nominal_fps_;
@@ -191,14 +195,14 @@ bool FrameSource::read_capture(Frame & frame)
 void FrameSource::stamp(Frame & frame, double source_time_seconds)
 {
   auto timestamp = std::chrono::steady_clock::now();
-  if (last_timestamp_ != std::chrono::steady_clock::time_point{} && timestamp <= last_timestamp_) {
+  if (last_timestamp_ != std::chrono::steady_clock::time_point{} && timestamp <= last_timestamp_) {     // 不是新时间且当前时间在上次时间前
     timestamp = last_timestamp_ + kTimestampStep;
-  }
+  }     // 防御性保护，一般不会读到提前的，有时候不小心读到两张一样的倒是有可能
   last_timestamp_ = timestamp;
 
   frame.timestamp = timestamp;
-  frame.sequence = next_sequence_++;
-  frame.source_time_seconds = source_time_seconds;
+  frame.sequence = next_sequence_++;      // 帧序号+1
+  frame.source_time_seconds = source_time_seconds; 
 }
 
 void FrameSource::reset()

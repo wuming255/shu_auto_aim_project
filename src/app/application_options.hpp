@@ -12,21 +12,21 @@ namespace srm::app
 
 struct ApplicationOptions
 {
-  io::FrameSourceConfig frame_source;
-  io::TransportConfig transport;
+  io::FrameSourceConfig frame_source;   // 输入源相关配置文件
+  io::TransportConfig transport;        // 串口通信相关配置文件
 
   // 只用于不启动串口线程的离线运行；安全控制器仍会因为 transport 未运行而拒绝瞄准命令。
-  bool dry_run = false;
-  bool help = false;
+  bool dry_run = false;                 // 是否为离线运行模式
+  bool help = false;                    // 是否显示帮助信息
   std::string config_path;
   std::string log_path;
   std::string debug_directory;
-  std::string summary_path;
-  std::size_t max_frames = 0;  // 0 表示直到 EOF 或收到停止信号。
+  std::string summary_path;             // 摘要文件路径
+  std::size_t max_frames = 0;  // 最大处理帧数，0 表示直到 EOF 或收到停止信号。
   std::size_t debug_every = 1;  // 每隔多少帧保存一张 debug 图像。
 
   // 没有提供标定内参时保留 PoseSolver 的默认矩阵，并由主程序打印提示。
-  bool intrinsics_set = false;
+  bool intrinsics_set = false;      // 是否设置了相机内参
   double fx = 1.0;
   double fy = 1.0;
   double cx = 0.0;

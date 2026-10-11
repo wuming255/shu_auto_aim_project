@@ -11,23 +11,24 @@
 
 namespace srm::app
 {
-namespace
+
+namespace   // 匿名命名空间，表示这里面的东西只在这个文件中可见
 {
 
-std::string trim(const std::string & text)
+std::string trim(const std::string & text)    // 去掉字符串前后的空白字符
 {
   const auto first = std::find_if_not(text.begin(), text.end(), [](unsigned char character) {
     return std::isspace(character) != 0;
-  });
+  });         // 第三个参数是一个匿名函数，判断字符是否为空白字符
   if (first == text.end()) return {};
 
   const auto last = std::find_if_not(text.rbegin(), text.rend(), [](unsigned char character) {
     return std::isspace(character) != 0;
-  }).base();
+  }).base();        // base()将反向迭代器换成正向的
   return std::string(first, last);
 }
 
-double parse_double(const std::string & text, const char * option)
+double parse_double(const std::string & text, const char * option)  // 将字符串转换为double类型
 {
   std::size_t consumed = 0;
   double value = 0.0;
@@ -42,7 +43,7 @@ double parse_double(const std::string & text, const char * option)
   return value;
 }
 
-long long parse_integer(const std::string & text, const char * option)
+long long parse_integer(const std::string & text, const char * option)  // 将字符串转换为整数类型
 {
   std::size_t consumed = 0;
   long long value = 0;
@@ -57,7 +58,7 @@ long long parse_integer(const std::string & text, const char * option)
   return value;
 }
 
-bool parse_bool(const std::string & text, const char * option)
+bool parse_bool(const std::string & text, const char * option)  // 将字符串转换为布尔类型
 {
   if (text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "on") {
     return true;
@@ -68,7 +69,7 @@ bool parse_bool(const std::string & text, const char * option)
   throw std::invalid_argument(std::string("invalid boolean for ") + option + ": " + text);
 }
 
-std::string require_value(int & index, int argc, const char * const argv[], const char * option)
+std::string require_value(int & index, int argc, const char * const argv[], const char * option)    // 读入参数值
 {
   if (index + 1 >= argc) {
     throw std::invalid_argument(std::string("missing value for ") + option);
@@ -77,7 +78,7 @@ std::string require_value(int & index, int argc, const char * const argv[], cons
   return argv[index];
 }
 
-io::FrameSourceType parse_input_type(const std::string & value, const char * option)
+io::FrameSourceType parse_input_type(const std::string & value, const char * option)  // 读取输入源类型
 {
   if (value == "image") return io::FrameSourceType::image_file;
   if (value == "video") return io::FrameSourceType::video_file;
@@ -85,11 +86,11 @@ io::FrameSourceType parse_input_type(const std::string & value, const char * opt
   throw std::invalid_argument(std::string(option) + " must be image, video or camera");
 }
 
-void parse_intrinsics(ApplicationOptions & options, const std::string & text, const char * option)
+void parse_intrinsics(ApplicationOptions & options, const std::string & text, const char * option)  // 读取相机内参
 {
   std::stringstream stream(text);
   std::string field;
-  double values[4]{};
+  double values[4]{};       // {}是初始化，里面没填就默认初始化为0
   for (int index = 0; index < 4; ++index) {
     if (!std::getline(stream, field, ',')) {
       throw std::invalid_argument(std::string(option) + " expects fx,fy,cx,cy");
@@ -109,7 +110,7 @@ void parse_intrinsics(ApplicationOptions & options, const std::string & text, co
   options.cy = values[3];
 }
 
-void set_camera_index(ApplicationOptions & options, const std::string & text, const char * option)
+void set_camera_index(ApplicationOptions & options, const std::string & text, const char * option)  // 读取相机索引编号
 {
   const auto value = parse_integer(text, option);
   if (value < 0 || value > std::numeric_limits<int>::max()) {
@@ -128,14 +129,14 @@ void set_positive_duration(
   destination = std::chrono::milliseconds(value);
 }
 
-void set_max_frames(ApplicationOptions & options, const std::string & text, const char * option)
+void set_max_frames(ApplicationOptions & options, const std::string & text, const char * option)  // 读取最大处理帧数
 {
   const auto value = parse_integer(text, option);
   if (value < 0) throw std::invalid_argument(std::string(option) + " must not be negative");
   options.max_frames = static_cast<std::size_t>(value);
 }
 
-void set_debug_every(ApplicationOptions & options, const std::string & text, const char * option)
+void set_debug_every(ApplicationOptions & options, const std::string & text, const char * option)   //读取调试图保存时间间隔
 {
   const auto value = parse_integer(text, option);
   if (value <= 0) throw std::invalid_argument(std::string(option) + " must be positive");
@@ -184,7 +185,7 @@ void apply_config_entry(
   }
 }
 
-void validate_options(const ApplicationOptions & options)
+void validate_options(const ApplicationOptions & options)     // 配置参数合法性检查
 {
   if (options.help) return;
 
@@ -209,7 +210,7 @@ void validate_options(const ApplicationOptions & options)
   }
 }
 
-ApplicationOptions default_options()
+ApplicationOptions default_options()    //初始化配置数据类
 {
   ApplicationOptions options;
   options.frame_source.type = io::FrameSourceType::opencv_camera;
@@ -217,9 +218,9 @@ ApplicationOptions default_options()
   return options;
 }
 
-}  // namespace
+}  // namespace的后括号
 
-void load_config_file(const std::string & path, ApplicationOptions & options)
+void load_config_file(const std::string & path, ApplicationOptions & options)   // 读取配置文件，将配置文件中的参数加载到配置数据类中
 {
   if (path.empty()) throw std::invalid_argument("configuration path must not be empty");
 
@@ -251,12 +252,12 @@ void load_config_file(const std::string & path, ApplicationOptions & options)
   if (input.bad()) throw std::invalid_argument("failed while reading configuration file: " + path);
 }
 
-ApplicationOptions parse_arguments(int argc, const char * const argv[])
+ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将命令行中提供的参数解析到配置数据类中
 {
   if (argc <= 0 || argv == nullptr) throw std::invalid_argument("invalid argument vector");
 
   ApplicationOptions options = default_options();
-  for (int index = 1; index < argc; ++index) {
+  for (int index = 1; index < argc; ++index) {  // 读取配置文件路径，并加载配置文件中的参数到配置数据类中
     if (std::string(argv[index]) != "--config") continue;
     if (index + 1 >= argc) throw std::invalid_argument("missing value for --config");
     if (!options.config_path.empty()) {
@@ -267,7 +268,7 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])
   }
   if (!options.config_path.empty()) load_config_file(options.config_path, options);
 
-  for (int index = 1; index < argc; ++index) {
+  for (int index = 1; index < argc; ++index) {    // 根据命令行参数，一个一个设置参数
     const std::string argument = argv[index];
     if (argument == "--config") {
       ++index;
@@ -390,7 +391,7 @@ std::string usage(const char * program_name)
     << "  --io-timeout-ms N           serial IO timeout (default: 20)\n"
     << "  --reconnect-ms N            reconnect interval (default: 100)\n"
     << "  --help                      show this help\n";
-  return stream.str();
+  return stream.str();      // 把输入流中的内容转换为字符串返回
 }
 
 }  // namespace srm::app

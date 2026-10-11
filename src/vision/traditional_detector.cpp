@@ -8,18 +8,19 @@
 
 namespace srm::vision
 {
+
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kArmorRoiExtension = 1.125;
 
-bool finite_non_negative(double value)
+bool finite_non_negative(double value)      // 检查数据有限且不小于
 {
   return std::isfinite(value) && value >= 0.0;
 }
 
 double line_angle_error(double line_angle, double target_angle)
-{
+{   // 算方向误差
   // 直线方向按 pi 周期处理，避免向左倾斜的近竖直灯条被误判为 180 度错误。
   auto error = std::abs(std::atan2(std::sin(line_angle - target_angle),
                                    std::cos(line_angle - target_angle)));
@@ -27,12 +28,14 @@ double line_angle_error(double line_angle, double target_angle)
   return error;
 }
 
-cv::Rect clipped_rect(const cv::Rect & rect, const cv::Size & size)
+cv::Rect clipped_rect(const cv::Rect & rect, const cv::Size & size) // 把矩形画到图像里面去
 {
   return rect & cv::Rect(0, 0, size.width, size.height);
 }
 
 }  // namespace
+
+
 
 const char * to_string(LightColor color) noexcept
 {
@@ -48,7 +51,8 @@ const char * to_string(LightColor color) noexcept
   }
 }
 
-TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : config_(config)
+
+TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : config_(config)    // 构造函数加载配置
 {
   if (!finite_non_negative(config_.brightness_threshold) || config_.brightness_threshold > 255.0) {
     throw std::invalid_argument("brightness threshold must be within [0, 255]");
@@ -72,47 +76,48 @@ TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : con
     throw std::invalid_argument("invalid traditional detector geometry configuration");
   }
 
-  max_lightbar_angle_error_rad_ = config_.max_lightbar_angle_error_deg * kPi / 180.0;
-  max_rectangular_error_rad_ = config_.max_rectangular_error_deg * kPi / 180.0;
+  max_lightbar_angle_error_rad_ = config_.max_lightbar_angle_error_deg * kPi / 180.0;   // 灯条和竖向差角的最大值，弧度表示
+  max_rectangular_error_rad_ = config_.max_rectangular_error_deg * kPi / 180.0;         // 灯条和横向差角的最大值，弧度表示
 }
+
 
 DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
 {
-  if (bgr_image.empty()) throw std::invalid_argument("traditional detector received an empty image");
+  if (bgr_image.empty()) throw std::invalid_argument("traditional detector received an empty image");   // 收到了空图像
   if (bgr_image.type() != CV_8UC3) {
     throw std::invalid_argument("traditional detector expects an 8-bit BGR image");
   }
 
   // 参考项目使用灰度阈值。本实现改用三个 BGR 通道的最大值，保留红/蓝灯条的高亮信息。
-  std::vector<cv::Mat> channels;
-  cv::split(bgr_image, channels);
+  std::vector<cv::Mat> channels;        // 几个容器用来放拆分的图像
+  cv::split(bgr_image, channels);       // 拆分通道放到容器中
   cv::Mat brightness = cv::max(channels[0], channels[1]);
-  brightness = cv::max(brightness, channels[2]);
+  brightness = cv::max(brightness, channels[2]);      // 每个像素取三通道中的最大值
 
-  DetectionResult result;
-  cv::threshold(
+  DetectionResult result;   
+  cv::threshold(    // 获取二值图
     brightness, result.brightness_mask, config_.brightness_threshold, 255, cv::THRESH_BINARY);
 
-  std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(
-    result.brightness_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
+  std::vector<std::vector<cv::Point>> contours;         // 二位数组，其中每个一维数组表示一个轮廓，每个轮廓一维数组又是由一堆点组成的
+  cv::findContours(                                     // 找轮廓
+    result.brightness_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);      // contours是接收轮廓的
 
   std::size_t lightbar_id = 0;
   for (const auto & contour : contours) {
-    if (contour.size() < 5) continue;
+    if (contour.size() < 5) continue;     // 轮廓点少于5个跳过
 
     const auto rotated_rect = cv::minAreaRect(contour);
-    auto lightbar = make_lightbar(rotated_rect, lightbar_id);
-    if (!valid_lightbar(lightbar)) continue;
+    auto lightbar = make_lightbar(rotated_rect, lightbar_id);     // 识别灯条的
+    if (!valid_lightbar(lightbar)) continue;        // 判断灯条合理性的
 
-    lightbar.color = classify_color(bgr_image, contour);
+    lightbar.color = classify_color(bgr_image, contour);      // 判断灯条颜色
     if (lightbar.color == LightColor::unknown) continue;
 
-    result.lightbars.push_back(std::move(lightbar));
+    result.lightbars.push_back(std::move(lightbar));      // 判断ok了加入检测结果中的灯条识别结果
     ++lightbar_id;
   }
 
-  std::sort(
+  std::sort( 
     result.lightbars.begin(), result.lightbars.end(),
     [](const LightbarObservation & lhs, const LightbarObservation & rhs) {
       return lhs.center.x < rhs.center.x;
@@ -121,42 +126,43 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
   for (std::size_t left_index = 0; left_index < result.lightbars.size(); ++left_index) {
     for (std::size_t right_index = left_index + 1; right_index < result.lightbars.size();
          ++right_index) {
-      const auto & left = result.lightbars[left_index];
-      const auto & right = result.lightbars[right_index];
+      const auto & left = result.lightbars[left_index];         // 左灯条放左
+      const auto & right = result.lightbars[right_index];       // 右灯条放右
       if (left.color != right.color) continue;
 
-      ArmorObservation armor;
+      ArmorObservation armor;     // 构建装甲板并输入各个数据
       armor.left = left;
       armor.right = right;
       armor.color = left.color;
       armor.center = (left.center + right.center) / 2.0F;
       armor.points = {left.top, right.top, right.bottom, left.bottom};
 
-      const auto center_distance = cv::norm(right.center - left.center);
+      const auto center_distance = cv::norm(right.center - left.center);      // 算灯条中心距离（norm是范数的意思）
       const auto max_length = std::max(left.length, right.length);
       const auto min_length = std::min(left.length, right.length);
       if (max_length <= std::numeric_limits<double>::epsilon() ||
-          min_length <= std::numeric_limits<double>::epsilon()) {
-        continue;
+          min_length <= std::numeric_limits<double>::epsilon()) {     // std::numeric_limits<double>::epsilon()是获取double的机器精度，
+        continue;                                                     // 小于机器精度的话说明这个数值过小接近于0了
       }
 
-      armor.ratio = center_distance / max_length;
-      armor.side_ratio = max_length / min_length;
-      const auto left_to_right = right.center - left.center;
-      const auto roll = std::atan2(left_to_right.y, left_to_right.x);
-      const auto left_error = line_angle_error(left.angle, roll + kPi / 2.0);
+      armor.ratio = center_distance / max_length;                    // 中心距离和长度距离的比值
+      armor.side_ratio = max_length / min_length;                    // 最长和最短的比值
+      const auto left_to_right = right.center - left.center;         // 方向向量，用于下面算方向角的
+      const auto roll = std::atan2(left_to_right.y, left_to_right.x);                  // 算中心连线的方向角
+      const auto left_error = line_angle_error(left.angle, roll + kPi / 2.0);          // 比较两条直线的夹角，返回其中较小的那个方向角
       const auto right_error = line_angle_error(right.angle, roll + kPi / 2.0);
       armor.rectangular_error = std::max(left_error, right_error);
 
-      if (!valid_armor(armor)) continue;
-      armor.roi = make_roi(armor, bgr_image.size());
+      if (!valid_armor(armor)) continue;                  // 这里面写了对方向角的要求
+      armor.roi = make_roi(armor, bgr_image.size());      // 装甲板合格就生成关注区域
       if (armor.roi.empty()) continue;
-      result.armors.push_back(std::move(armor));
+      result.armors.push_back(std::move(armor));        // 成功生成关注区域后加入装甲板列表
     }
   }
 
   return result;
 }
+
 
 cv::Mat TraditionalDetector::draw_debug(
   const cv::Mat & bgr_image, const DetectionResult & result) const
@@ -165,22 +171,22 @@ cv::Mat TraditionalDetector::draw_debug(
     throw std::invalid_argument("draw_debug expects an 8-bit BGR image");
   }
 
-  auto drawing = bgr_image.clone();
-  for (const auto & lightbar : result.lightbars) {
-    const cv::Scalar color = lightbar.color == LightColor::red
+  auto drawing = bgr_image.clone();         // 创建图片副本
+  for (const auto & lightbar : result.lightbars) {      // 遍历检测结果中的灯条
+    const cv::Scalar color = lightbar.color == LightColor::red      // 选颜色
                                ? cv::Scalar(0, 0, 255)
                                : cv::Scalar(255, 0, 0);
-    cv::line(drawing, lightbar.top, lightbar.bottom, color, 2, cv::LINE_AA);
-    cv::putText(
+    cv::line(drawing, lightbar.top, lightbar.bottom, color, 2, cv::LINE_AA);    // 画线
+    cv::putText(                                                                // 写字
       drawing, to_string(lightbar.color), lightbar.top, cv::FONT_HERSHEY_SIMPLEX, 0.45, color, 1,
       cv::LINE_AA);
   }
 
-  for (const auto & armor : result.armors) {
-    const std::vector<cv::Point> points{
+  for (const auto & armor : result.armors) {        // 遍历装甲板
+    const std::vector<cv::Point> points{            // 拿点
       armor.points[0], armor.points[1], armor.points[2], armor.points[3]};
-    cv::polylines(drawing, points, true, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
-    cv::rectangle(drawing, armor.roi, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+    cv::polylines(drawing, points, true, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);        // 画装甲板矩形
+    cv::rectangle(drawing, armor.roi, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);         // 画注意区矩形
   }
   return drawing;
 }
@@ -190,16 +196,18 @@ const TraditionalDetectorConfig & TraditionalDetector::config() const noexcept
   return config_;
 }
 
-LightbarObservation TraditionalDetector::make_lightbar(
+LightbarObservation TraditionalDetector::make_lightbar(       // 识别灯条
   const cv::RotatedRect & rotated_rect, std::size_t id)
 {
+  // 取点并排序
   std::array<cv::Point2f, 4> corners{};
-  rotated_rect.points(corners.data());
+  rotated_rect.points(corners.data());            // 取点放入corners
   std::sort(corners.begin(), corners.end(), [](const cv::Point2f & lhs, const cv::Point2f & rhs) {
     if (lhs.y == rhs.y) return lhs.x < rhs.x;
     return lhs.y < rhs.y;
   });
 
+  // 记录一堆数据
   LightbarObservation lightbar;
   lightbar.id = id;
   lightbar.rotated_rect = rotated_rect;
@@ -233,7 +241,7 @@ bool TraditionalDetector::valid_armor(const ArmorObservation & armor) const
          armor.rectangular_error < max_rectangular_error_rad_;
 }
 
-LightColor TraditionalDetector::classify_color(
+LightColor TraditionalDetector::classify_color(                         // 统计灯条轮廓上红蓝两个像素点的数量
   const cv::Mat & bgr_image, const std::vector<cv::Point> & contour) const
 {
   double red_sum = 0.0;
@@ -243,13 +251,13 @@ LightColor TraditionalDetector::classify_color(
     if (point.x < 0 || point.x >= bgr_image.cols || point.y < 0 || point.y >= bgr_image.rows) {
       continue;
     }
-    const auto pixel = bgr_image.at<cv::Vec3b>(point);
+    const auto pixel = bgr_image.at<cv::Vec3b>(point);        // 读取像素
     blue_sum += pixel[0];
     red_sum += pixel[2];
     ++count;
   }
 
-  if (count == 0 || std::abs(blue_sum - red_sum) < config_.min_color_difference * count) {
+  if (count == 0 || std::abs(blue_sum - red_sum) < config_.min_color_difference * count) {      // 比较差异点数量和阈值
     return LightColor::unknown;
   }
   return blue_sum > red_sum ? LightColor::blue : LightColor::red;
@@ -258,12 +266,14 @@ LightColor TraditionalDetector::classify_color(
 cv::Rect TraditionalDetector::make_roi(
   const ArmorObservation & armor, const cv::Size & image_size) const
 {
-  const auto left_axis = armor.left.top2bottom * static_cast<float>(kArmorRoiExtension);
+  // kArmorRoiExtension的值为1.25，这里就是按1.25倍缩放矩形罢了
+  const auto left_axis = armor.left.top2bottom * static_cast<float>(kArmorRoiExtension);      
   const auto right_axis = armor.right.top2bottom * static_cast<float>(kArmorRoiExtension);
-  const std::array<cv::Point2f, 4> extended_points{
+  const std::array<cv::Point2f, 4> extended_points{                   // 四个拓展点，也就是拓展出去的矩形的四个角点
     armor.left.center - left_axis, armor.right.center - right_axis,
     armor.right.center + right_axis, armor.left.center + left_axis};
 
+  // 找最左和最右的，最上和最下的边界
   float min_x = extended_points[0].x;
   float max_x = extended_points[0].x;
   float min_y = extended_points[0].y;
@@ -279,7 +289,7 @@ cv::Rect TraditionalDetector::make_roi(
   const auto top = static_cast<int>(std::floor(min_y));
   const auto right = static_cast<int>(std::ceil(max_x));
   const auto bottom = static_cast<int>(std::ceil(max_y));
-  return clipped_rect(cv::Rect(left, top, right - left, bottom - top), image_size);
+  return clipped_rect(cv::Rect(left, top, right - left, bottom - top), image_size);     // 矩形和图像取交集，防止画到图像外面
 }
 
 }  // namespace srm::vision
