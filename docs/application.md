@@ -13,6 +13,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j2
 ```
 
+窗口功能使用可选的 OpenCV HighGUI；CMake 会打印 `SRM optional debug windows: enabled` 或 `unavailable`。没有 HighGUI 时仍可构建并执行非 GUI 回放，也可用 `-DSRM_ENABLE_GUI=OFF` 显式关闭窗口支持。
+
 可执行文件：
 
 ```text
@@ -58,6 +60,9 @@ build/srm_auto_aim_app \
 - `--summary PATH`：写入 key=value 运行摘要；
 - `--debug-dir PATH`：创建目录并保存传统检测 debug 图像；为空时不保存；
 - `--debug-every N`：每隔 N 个输入序号保存一张 debug 图，默认 `1`；
+- `--show-debug` / `--no-show-debug`：开启或关闭可选窗口，默认关闭，仅支持 dry-run 图片/视频；
+- `--playback-fps FPS`：窗口播放帧率，`0` 自动选择，非零值范围为 `[0.1, 1000]`；
+- `--start-paused` / `--no-start-paused`：视频是否在第一帧暂停，默认不暂停；
 - `--max-frames N`：处理 N 帧后退出，0 表示不限制；
 - `--loop`：循环图片/视频文件；
 - `--dry-run`：不启动串口线程，仅用于离线检查。此模式安全控制器会因 transport 未运行而拒绝有效瞄准命令；
@@ -67,6 +72,40 @@ build/srm_auto_aim_app \
 `--debug-dir` 会在启动时创建目录（包括必要的父目录）；图像文件命名为 `frame_000000.png`、`frame_000001.png` 等，编号使用 `Frame.sequence`。图像由 `TraditionalDetector::draw_debug()` 生成，不打开 GUI 窗口；当检测回调成功且序号满足 `debug-every` 时才写出。
 
 未提供 `--intrinsics` 时，程序仍可启动用于输入和检测 smoke test，但会明确警告；不得把默认矩阵当作现场标定结果。
+
+## 可选窗口调试
+
+有桌面显示服务和 HighGUI 后端时，可逐帧查看视频的传统检测结果：
+
+```bash
+build/srm_auto_aim_app \
+  --input video \
+  --source demo.avi \
+  --dry-run \
+  --show-debug \
+  --start-paused \
+  --debug-dir replay_debug \
+  --debug-every 5 \
+  --summary replay_summary.txt \
+  --log replay.csv
+```
+
+`SRM detection` 显示当前 BGR 帧、灯条、装甲板四角点和 ROI；上方信息栏显示帧序号、源时间、灯条/装甲板数量及播放状态。`SRM brightness mask` 显示该帧 `DetectionResult::brightness_mask`，采用现有的 BGR 通道最大值阈值结果。无装甲板时仍更新两个窗口；检测异常时显示当前原图、空二值图和 `detection unavailable`，不复用上一帧结果。
+
+在任一窗口获得键盘焦点后：
+
+- 空格：暂停或继续；暂停期间不读取下一帧，也不追加 CSV 或重复保存图像；
+- `n`：前进一帧并保持暂停；播放中按 `n` 也会进入单步状态；
+- `q`、Esc 或关闭任一窗口：正常退出并写出已处理帧的 summary；
+- Ctrl+C / SIGTERM：播放和暂停期间都响应停止请求。
+
+默认按 `FrameSource::nominal_fps()` 播放；源帧率不可用时回退为 30 FPS，可用 `--playback-fps 10` 放慢。播放等待计入检测和保存已花费的时间，处理慢时仍逐帧显示，不丢帧追赶；GUI 事件处理使实际帧率可能低于指定值。自动帧率的等待范围限制为 0.1–1000 FPS。
+
+图片输入会在首帧自动暂停，方便观察；按 `n` 继续到下一帧或 EOF。视频读到 EOF 或达到 `--max-frames` 后关闭窗口；需要反复观察时使用 `--loop`，或先用 `--start-paused` 再单步。窗口显示每个成功读取的帧，`--debug-every` 只控制文件保存，保存的图像仍由原来的 `draw_debug()` 生成，不包含窗口信息栏。
+
+窗口仅允许与 `--dry-run` 和文件输入一起使用，因此暂停不会挂起实时云台控制。不启用窗口时不调用 HighGUI，也不加入播放等待；无桌面环境可继续使用原有的 `--debug-dir`、CSV 和 summary。若配置文件启用了窗口，可用 `--no-show-debug --no-start-paused --playback-fps 0` 覆盖；构建不支持窗口或缺少显示环境时，显式请求窗口会报告错误。
+
+跟踪仍使用读取时的单调时间戳，播放速度和暂停会改变帧间时间；窗口回放用于观察检测结果，不能据此评估实际目标角速度、预测精度或现场控制性能。`step_duration_us` 只记录运行步骤，不包含窗口显示、保存或播放等待。
 
 ## 配置文件
 
@@ -92,6 +131,9 @@ runtime.debug_dir=replay_debug
 runtime.summary=replay_summary.txt
 runtime.debug_every=5
 runtime.max_frames=0
+runtime.show_debug=false
+runtime.start_paused=false
+runtime.playback_fps=0
 camera.intrinsics=800,800,320,240
 ```
 
@@ -111,6 +153,9 @@ camera.intrinsics=800,800,320,240
 - `runtime.summary`
 - `runtime.debug_every`
 - `runtime.max_frames`
+- `runtime.show_debug`
+- `runtime.start_paused`
+- `runtime.playback_fps`
 - `camera.intrinsics`
 
 配置文件先于命令行应用；同名命令行参数覆盖配置文件值。例如：
@@ -160,13 +205,13 @@ error
 - `frame_time_us` 是 `steady_clock` 时间点相对于其时钟 epoch 的微秒值，只适合在同一进程/同一日志内比较延迟，不是 Unix 日历时间；
 - `source_time_seconds` 是输入文件提供的源时间；图片输入通常为 0；
 - `safety_reasons` 使用 `|` 分隔；包含逗号、引号或换行的字段按照 CSV 规则转义；
-- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败。
+- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败；缺失的帧和管线字段留空，所有行保持与表头一致的 21 列。
 
 CSV 记录用于离线诊断，不应直接作为下位机协议输入。
 
 ## key=value 运行摘要
 
-指定 `--summary PATH` 后，程序在正常完成输入、达到 `--max-frames` 或收到停止信号并完成安全停止后写出摘要。摘要使用稳定的 `key=value` 行格式，至少包含：
+指定 `--summary PATH` 后，程序在正常完成输入、达到 `--max-frames`、窗口退出或收到停止信号并完成安全停止后写出摘要。摘要使用稳定的 `key=value` 行格式，至少包含：
 
 ```text
 processed_frames=...

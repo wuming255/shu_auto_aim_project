@@ -134,7 +134,7 @@
 - `src/app/runtime_csv_logger.*` 记录帧序号、帧源时间、候选数量、跟踪状态、数学瞄准结果、安全状态、`fire_flag`、安全原因和错误信息，支持无桌面环境下的离线诊断。
 - `src/app/main.cpp` 使用现有 `TraditionalDetector` 和阶段六/七模块建立 `srm_auto_aim_app`；图片、视频和 OpenCV camera index 共用同一运行路径。
 - `--dry-run` 不启动传输线程，仅用于输入/检测/日志 smoke test；由于安全控制器会看到 transport 未运行，该模式不会输出有效瞄准命令。
-- 当前入口仍不负责加载标定文件、绑定海康 MVS SDK、提供 GUI 或修改视觉开火配置；这些事项保持在后续适配和 `questions.md` 现场验证边界内。
+- 当前入口仍不负责加载标定文件、绑定海康 MVS SDK 或修改视觉开火配置；这些事项保持在后续适配和 `questions.md` 现场验证边界内。
 
 
 ## 参数文件层（阶段八第二轮）
@@ -151,3 +151,10 @@
 - `srm_auto_aim_app` 可按 `--debug-every` 将 `TraditionalDetector::draw_debug()` 的结果保存到 `--debug-dir`，并按 `--summary` 写出稳定的 key=value 运行摘要。目录创建、图像写入和摘要写入失败会报告错误。
 - 当前应用的 debug、CSV 和 summary 输出均可在 `--dry-run` 下使用；未启动 transport 时安全状态保持非开火，摘要中的 `nonzero_fire_request_count` 应为 0。
 - 运行统计只用于观测和交付准备，不会改变目标选择、预测、弹道补偿、安全状态机或正式 18 字节/30 字节 CDC 帧布局。真实相机、标定、CDC、云台和发射验证仍统一放在 `questions.md`。
+
+## 可选离线窗口调试
+
+- `src/app/debug_viewer.*` 在应用层显示 `draw_debug()` 图像和 `DetectionResult::brightness_mask`，管理播放节奏、暂停、单步、退出和窗口清理；算法层和输入层不调用 GUI。
+- `--show-debug` 默认关闭，只支持 dry-run 图片/视频；显示每帧，与 debug 文件保存频率独立。窗口等待期间不调用运行时，不重复记日志或处理当前帧。
+- HighGUI 只链接到应用窗口实现，CMake 可自动降级为非 GUI 构建或通过 `SRM_ENABLE_GUI=OFF` 禁用。未启用窗口的路径无需桌面显示服务。
+- 播放和暂停不改变 `FrameSource` 的单调时间戳定义，窗口回放的检测观察不等同于预测、弹道或现场性能验证。

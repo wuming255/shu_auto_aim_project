@@ -46,6 +46,7 @@ void test_command_line_options()
     "--camera-index", "2", "--loop", "--dry-run", "--max-frames", "7",
     "--intrinsics", "800,801,320,240", "--log", "/tmp/run.csv",
     "--debug-dir", "/tmp/debug", "--summary", "/tmp/summary.txt", "--debug-every", "3",
+    "--show-debug", "--start-paused", "--playback-fps", "12.5",
     "--transmit-period-ms", "15", "--io-timeout-ms", "22", "--reconnect-ms", "33"});
 
   assert(options.frame_source.type == FrameSourceType::video_file);
@@ -65,10 +66,41 @@ void test_command_line_options()
   assert(options.debug_directory == "/tmp/debug");
   assert(options.summary_path == "/tmp/summary.txt");
   assert(options.debug_every == 3);
+  assert(options.show_debug && options.start_paused);
+  assert(options.playback_fps == 12.5);
 
   const auto camera_options = parse({"--input", "camera", "--camera-index", "1"});
   assert(camera_options.frame_source.type == FrameSourceType::opencv_camera);
   assert(camera_options.frame_source.camera_index == 1);
+  assert(!camera_options.show_debug && !camera_options.start_paused);
+  assert(camera_options.playback_fps == 0.0);
+}
+
+void test_debug_window_validation()
+{
+  // 交互不能暂停实时控制；无窗口时也不能静默忽略播放参数。
+  const std::vector<std::vector<std::string>> invalid_arguments{
+    {"--input", "video", "--source", "x.avi", "--show-debug"},
+    {"--input", "camera", "--dry-run", "--show-debug"},
+    {"--start-paused"},
+    {"--playback-fps", "12"},
+    {"--playback-fps", "-1"},
+    {"--playback-fps", "0.01"},
+    {"--playback-fps", "1001"},
+    {"--playback-fps", "nan"},
+    {"--playback-fps", "inf"}};
+  for (const auto & arguments : invalid_arguments) {
+    bool rejected = false;
+    try {
+      (void)parse_dynamic(arguments);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    assert(rejected);
+  }
+
+  const auto image = parse({"--input", "image", "--source", "x.png", "--dry-run", "--show-debug"});
+  assert(image.show_debug && image.playback_fps == 0.0);
 }
 
 void test_command_line_validation()
@@ -132,13 +164,17 @@ void test_config_file_and_cli_override()
            << "runtime.summary=config_summary.txt\n"
            << "runtime.debug_every=5\n"
            << "runtime.max_frames=4\n"
+           << "runtime.show_debug=true\n"
+           << "runtime.start_paused=true\n"
+           << "runtime.playback_fps=15\n"
            << "camera.intrinsics=700,701,320,240\n";
   }
 
   const auto overridden = parse_dynamic({
     "--config", path, "--source", "cli.png", "--no-loop", "--live", "--max-frames", "8",
     "--device", "/dev/cli", "--intrinsics", "800,801,320,240",
-    "--debug-dir", "cli_debug", "--summary", "cli_summary.txt", "--debug-every", "2"});
+    "--debug-dir", "cli_debug", "--summary", "cli_summary.txt", "--debug-every", "2",
+    "--no-show-debug", "--no-start-paused", "--playback-fps", "0"});
   assert(overridden.config_path == path);
   assert(overridden.frame_source.type == FrameSourceType::image_file);
   assert(overridden.frame_source.uri == "cli.png");
@@ -156,6 +192,8 @@ void test_config_file_and_cli_override()
   assert(overridden.debug_directory == "cli_debug");
   assert(overridden.summary_path == "cli_summary.txt");
   assert(overridden.debug_every == 2);
+  assert(!overridden.show_debug && !overridden.start_paused);
+  assert(overridden.playback_fps == 0.0);
 
   const auto config_only = parse_dynamic({"--config", path});
   assert(config_only.dry_run);
@@ -165,6 +203,8 @@ void test_config_file_and_cli_override()
   assert(config_only.debug_directory == "config_debug");
   assert(config_only.summary_path == "config_summary.txt");
   assert(config_only.debug_every == 5);
+  assert(config_only.show_debug && config_only.start_paused);
+  assert(config_only.playback_fps == 15.0);
 
   bool unknown_key = false;
   {
@@ -233,6 +273,62 @@ void test_runtime_csv_logger()
   ::unlink(path.c_str());
 }
 
+void test_runtime_csv_missing_values()
+{
+  const auto path = std::string("/tmp/shu_auto_aim_runtime_log_missing_") +
+                    std::to_string(static_cast<long long>(::getpid())) + ".csv";
+  RuntimeCsvLogger logger(path);
+  RuntimeStepResult end;
+  end.end_of_stream = true;
+  end.step_duration = std::chrono::microseconds(77);
+  end.safety.state = SafetyState::safe;
+  end.safety.reasons = {SafetyReason::frame_missing};
+  end.error = "frame source reached end of stream";
+  logger.log(end, RuntimeTransportSnapshot{4, 5, 6});
+
+  RuntimeStepResult failure;
+  failure.frame_read = true;
+  failure.frame.emplace();
+  failure.frame->sequence = 9;
+  failure.frame->source_time_seconds = 0.25;
+  failure.safety.state = SafetyState::safe;
+  failure.safety.reasons = {SafetyReason::processing_failed};
+  failure.error = "processing failed";
+  logger.log(failure);
+  assert(logger.rows_written() == 2);
+
+  std::ifstream input(path);
+  // 这些固定测试行不含转义字段，检查缺失值不会移动后续诊断列。
+  const auto read_fields = [&input] {
+    std::string line;
+    assert(static_cast<bool>(std::getline(input, line)));
+    std::istringstream row(line);
+    std::vector<std::string> fields;
+    for (std::string field; std::getline(row, field, ',');) fields.push_back(field);
+    return fields;
+  };
+  const auto header = read_fields();
+  const auto eof_fields = read_fields();
+  const auto failure_fields = read_fields();
+  assert(header.size() == 21);
+  assert(eof_fields.size() == header.size());
+  assert(failure_fields.size() == header.size());
+  assert(eof_fields[0].empty() && eof_fields[1] == "0" && eof_fields[2] == "1");
+  assert(eof_fields[3].empty() && eof_fields[4].empty());
+  assert(eof_fields[5] == "77" && eof_fields[6] == "4" && eof_fields[7] == "5" &&
+         eof_fields[8] == "6");
+  assert(failure_fields[0] == "9" && failure_fields[1] == "1" && failure_fields[2] == "0");
+  assert(failure_fields[4] == "0.25");
+  for (const auto & fields : {eof_fields, failure_fields}) {
+    for (std::size_t index = 9; index <= 14; ++index) assert(fields[index].empty());
+    assert(fields[15] == "safe");
+    assert(fields[16] == "0" && fields[17] == "0" && fields[18] == "0");
+  }
+  assert(eof_fields[19] == "frame_missing" && eof_fields[20] == end.error);
+  assert(failure_fields[19] == "processing_failed" && failure_fields[20] == failure.error);
+  ::unlink(path.c_str());
+}
+
 void test_runtime_statistics()
 {
   RuntimeStatistics statistics;
@@ -285,9 +381,11 @@ void test_runtime_statistics()
 int main()
 {
   test_command_line_options();
+  test_debug_window_validation();
   test_command_line_validation();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
+  test_runtime_csv_missing_values();
   test_runtime_statistics();
   return 0;
 }

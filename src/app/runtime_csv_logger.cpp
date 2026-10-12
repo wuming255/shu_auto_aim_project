@@ -32,6 +32,8 @@ void RuntimeCsvLogger::log(
     const auto timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
       result.frame->timestamp.time_since_epoch()).count();
     stream_ << timestamp_us << ',' << std::setprecision(17) << result.frame->source_time_seconds;
+  } else {
+    stream_ << ',';
   }
   stream_ << ',' << result.step_duration.count() << ','
           << transport.sent_frame_count << ','
@@ -45,6 +47,8 @@ void RuntimeCsvLogger::log(
             << (pipeline.aim.valid ? 1 : 0) << ',' << std::setprecision(17)
             << pipeline.aim.yaw_deg << ',' << pipeline.aim.pitch_deg << ','
             << pipeline.aim.bullet_speed_m_s;
+  } else {
+    stream_ << ",,,,,";
   }
   stream_ << ','
           << csv_field(control::to_string(result.safety.state)) << ','

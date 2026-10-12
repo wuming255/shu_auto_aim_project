@@ -22,6 +22,15 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
+OpenCV HighGUI 是窗口调试的可选依赖，配置输出会显示窗口支持状态。无桌面环境仍可执行默认的非 GUI 回放；需要完全关闭窗口编译时：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSRM_ENABLE_GUI=OFF
+cmake --build build -j2
+```
+
+重新启用使用 `-DSRM_ENABLE_GUI=ON`，并确保 OpenCV 提供可用的 HighGUI 后端。
+
 CTest 至少应包含：
 
 - 正式协议编解码和流式解析；
@@ -78,6 +87,8 @@ debug 图像目录
 ```
 
 这样可以在不连接下位机的情况下复现输入、检测结果、安全状态和耗时统计。离线回放中的 `dry_run=1` 表示 transport 未启动，不代表真实云台已经完成适配。
+
+有桌面显示服务时，可在视频 dry-run 命令中添加 `--show-debug --start-paused`，查看检测叠加图和二值图。空格暂停/继续，`n` 单步，`q`/Esc 或关闭任一窗口退出；`--playback-fps 10` 可放慢播放。显示与 `--debug-every` 的保存频率独立，详细行为见 [application.md](application.md#可选窗口调试)。
 
 ## 运行输出检查
 

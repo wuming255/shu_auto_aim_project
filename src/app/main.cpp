@@ -1,4 +1,5 @@
 #include "app/application_options.hpp"
+#include "app/debug_viewer.hpp"
 #include "app/runtime_csv_logger.hpp"
 #include "app/runtime_statistics.hpp"
 #include "control/auto_aim_pipeline.hpp"
@@ -9,6 +10,7 @@
 #include "vision/traditional_detector.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <exception>
@@ -67,12 +69,8 @@ void prepare_debug_directory(const std::string & directory)     // 创建调试�
 }
 
 void save_debug_frame(        // 保存调试图像
-  const std::string & directory, std::size_t debug_every, const srm::io::Frame & frame,
-  const srm::vision::DetectionResult & detection, const srm::vision::TraditionalDetector & detector)
+  const std::string & directory, const srm::io::Frame & frame, const cv::Mat & drawing)
 {
-  if (directory.empty() || frame.sequence % debug_every != 0) return;
-
-  const auto drawing = detector.draw_debug(frame.bgr, detection);
   std::ostringstream filename;
   filename << "frame_" << std::setfill('0') << std::setw(6) << frame.sequence << ".png";
   const auto path = std::filesystem::path(directory) / filename.str();
@@ -124,7 +122,21 @@ int main(int argc, const char * const argv[])
     srm::vision::TraditionalDetector detector;                        // 传统视觉检测模块
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
     srm::app::RuntimeStatistics statistics;                           // 运行统计模块，记录各个功能运行了多少次，有什么报错，运行了多久等信息
-    std::optional<srm::vision::DetectionResult> last_detection;       // 上一帧的检测结果，供调试图像保存使用（可能有值的DetectionResult类型数据）
+    std::optional<srm::vision::DetectionResult> last_detection;       // 本帧检测结果，供保存和窗口显示使用。
+    std::optional<srm::app::DebugViewer> debug_viewer;
+    if (options.show_debug) {
+      const double nominal_fps = frame_source.nominal_fps();
+      const double playback_fps = options.playback_fps > 0.0
+                                   ? options.playback_fps
+                                   : (std::isfinite(nominal_fps) && nominal_fps > 0.0
+                                        ? nominal_fps : 30.0);
+      debug_viewer.emplace(
+        playback_fps,
+        options.start_paused ||
+          options.frame_source.type == srm::io::FrameSourceType::image_file);
+      std::cerr << "debug windows: Space=pause/resume n=next q/Esc=quit playback_fps="
+                << playback_fps << '\n';
+    }
 
     srm::control::AutoAimRuntime runtime(                             // 一帧图像的总调度模块，安排各个模块的协作和数据流转
       frame_source, transport, srm::control::AutoAimPipeline(make_pipeline_config(options)),        // 瞄准算法模块
@@ -142,7 +154,7 @@ int main(int argc, const char * const argv[])
 
     std::size_t processed_frames = 0;     // 已处理的帧数
     while (!stop_requested.load()) {
-      if (g_stop_requested != 0) stop_requested.store(true);        // 有请求就关开关
+      if (g_stop_requested != 0) break;
       last_detection.reset();                                       // 清理上一帧的检测结果
 
       const auto result = runtime.step();                           // 返回的是一次处理结果的汇总
@@ -153,10 +165,22 @@ int main(int argc, const char * const argv[])
       logger.log(result, transport_snapshot);                       // 记录运行日志
       if (result.frame_read) {                                      // 成功读到了吗？
         ++processed_frames;
-        if (last_detection.has_value() && result.frame.has_value()) {         // 真的有数据吗？有就记录
-          save_debug_frame(
-            options.debug_directory, options.debug_every, result.frame.value(),
-            last_detection.value(), detector);
+        if (result.frame.has_value()) {
+          const auto & frame = result.frame.value();
+          const bool save_debug = last_detection.has_value() && !options.debug_directory.empty() &&
+                                  frame.sequence % options.debug_every == 0;
+          if (save_debug || debug_viewer.has_value()) {
+            const auto drawing = last_detection.has_value()
+                                   ? detector.draw_debug(frame.bgr, last_detection.value())
+                                   : frame.bgr;
+            if (save_debug) save_debug_frame(options.debug_directory, frame, drawing);
+            if (debug_viewer.has_value() &&
+                !debug_viewer->show_and_wait(
+                  drawing, frame, last_detection.has_value() ? &last_detection.value() : nullptr,
+                  [] { return g_stop_requested != 0; })) {
+              break;
+            }
+          }
         }
       }
 

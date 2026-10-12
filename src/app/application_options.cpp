@@ -143,6 +143,15 @@ void set_debug_every(ApplicationOptions & options, const std::string & text, con
   options.debug_every = static_cast<std::size_t>(value);
 }
 
+void set_playback_fps(ApplicationOptions & options, const std::string & text, const char * option)
+{
+  const auto value = parse_double(text, option);
+  if (value != 0.0 && (value < 0.1 || value > 1000.0)) {
+    throw std::invalid_argument(std::string(option) + " must be 0 (auto) or within [0.1, 1000]");
+  }
+  options.playback_fps = value;
+}
+
 void apply_config_entry(
   ApplicationOptions & options, const std::string & key, const std::string & value,
   std::size_t line_number)
@@ -177,6 +186,12 @@ void apply_config_entry(
     set_max_frames(options, value, context.c_str());
   } else if (key == "runtime.debug_every") {
     set_debug_every(options, value, context.c_str());
+  } else if (key == "runtime.show_debug") {
+    options.show_debug = parse_bool(value, context.c_str());
+  } else if (key == "runtime.start_paused") {
+    options.start_paused = parse_bool(value, context.c_str());
+  } else if (key == "runtime.playback_fps") {
+    set_playback_fps(options, value, context.c_str());
   } else if (key == "camera.intrinsics") {
     parse_intrinsics(options, value, context.c_str());
   } else {
@@ -207,6 +222,12 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   }
   if (options.debug_every == 0) {
     throw std::invalid_argument("debug frame interval must be positive");
+  }
+  if (options.show_debug && (!options.dry_run || type == io::FrameSourceType::opencv_camera)) {
+    throw std::invalid_argument("--show-debug requires --dry-run and image/video input");
+  }
+  if (!options.show_debug && (options.start_paused || options.playback_fps != 0.0)) {
+    throw std::invalid_argument("--start-paused and --playback-fps require --show-debug");
   }
 }
 
@@ -323,6 +344,19 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       options.debug_directory = require_value(index, argc, argv, "--debug-dir");
       continue;
     }
+    if (argument == "--show-debug" || argument == "--no-show-debug") {
+      options.show_debug = argument == "--show-debug";
+      continue;
+    }
+    if (argument == "--start-paused" || argument == "--no-start-paused") {
+      options.start_paused = argument == "--start-paused";
+      continue;
+    }
+    if (argument == "--playback-fps") {
+      set_playback_fps(
+        options, require_value(index, argc, argv, "--playback-fps"), "--playback-fps");
+      continue;
+    }
     if (argument == "--summary") {
       options.summary_path = require_value(index, argc, argv, "--summary");
       continue;
@@ -384,6 +418,11 @@ std::string usage(const char * program_name)
     << "  --summary PATH              write key=value replay summary\n"
     << "  --debug-dir PATH            save detector debug images\n"
     << "  --debug-every N             save every Nth frame (default: 1)\n"
+    << "  --show-debug/--no-show-debug  optional windows; dry-run image/video only\n"
+    << "  --playback-fps FPS          window playback rate; 0=source or 30 (default)\n"
+    << "                             nonzero FPS must be within [0.1, 1000]\n"
+    << "  --start-paused/--no-start-paused  pause on the first displayed frame\n"
+    << "                             keys: Space=pause, n=step, q/Esc=quit\n"
     << "  --max-frames N              stop after N frames; 0 means no limit\n"
     << "  --loop/--no-loop            enable or disable image/video looping\n"
     << "  --dry-run/--live            disable or enable transport startup\n"

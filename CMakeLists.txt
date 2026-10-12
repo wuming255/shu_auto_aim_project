@@ -6,7 +6,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d)
+option(SRM_ENABLE_GUI "Build optional debug windows when OpenCV HighGUI is available" ON)
+if(SRM_ENABLE_GUI)
+  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d OPTIONAL_COMPONENTS highgui)
+else()
+  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d)
+endif()
+
+# 算法和输入库只链接基础组件，HighGUI 仅由应用窗口使用。
+set(SRM_OPENCV_LIBS ${OpenCV_LIBS})
+list(REMOVE_ITEM SRM_OPENCV_LIBS opencv_highgui)
 
 add_library(srm_serial STATIC
   src/third_party/serial/src/serial.cc
@@ -49,7 +58,7 @@ target_include_directories(srm_frame_source
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(srm_frame_source PUBLIC ${OpenCV_LIBS})
+target_link_libraries(srm_frame_source PUBLIC ${SRM_OPENCV_LIBS})
 
 target_compile_options(srm_frame_source PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
@@ -65,7 +74,7 @@ target_include_directories(srm_traditional_detector
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(srm_traditional_detector PUBLIC ${OpenCV_LIBS})
+target_link_libraries(srm_traditional_detector PUBLIC ${SRM_OPENCV_LIBS})
 
 target_compile_options(srm_traditional_detector PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
@@ -81,7 +90,7 @@ target_include_directories(srm_pose_solver
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(srm_pose_solver PUBLIC ${OpenCV_LIBS})
+target_link_libraries(srm_pose_solver PUBLIC ${SRM_OPENCV_LIBS})
 
 target_compile_options(srm_pose_solver PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
@@ -100,7 +109,7 @@ target_include_directories(srm_target_selector
 target_link_libraries(srm_target_selector
   PUBLIC
     srm_pose_solver
-    ${OpenCV_LIBS}
+    ${SRM_OPENCV_LIBS}
 )
 
 target_compile_options(srm_target_selector PRIVATE
@@ -245,6 +254,7 @@ target_compile_options(srm_app_support PRIVATE
 
 add_executable(srm_auto_aim_app
   src/app/main.cpp
+  src/app/debug_viewer.cpp
 )
 
 target_link_libraries(srm_auto_aim_app
@@ -252,6 +262,14 @@ target_link_libraries(srm_auto_aim_app
     srm_app_support
     srm_traditional_detector
 )
+
+if(SRM_ENABLE_GUI AND OpenCV_highgui_FOUND)
+  target_compile_definitions(srm_auto_aim_app PRIVATE SRM_HAVE_HIGHGUI=1)
+  target_link_libraries(srm_auto_aim_app PRIVATE opencv_highgui)
+  message(STATUS "SRM optional debug windows: enabled")
+else()
+  message(STATUS "SRM optional debug windows: unavailable (headless replay supported)")
+endif()
 
 target_compile_options(srm_auto_aim_app PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>

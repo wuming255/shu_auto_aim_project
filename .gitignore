@@ -1,5 +1,6 @@
 /build/
 /sp_vision_25-main/
+/replay_debug/
 *.log
 *.o
 *.a
