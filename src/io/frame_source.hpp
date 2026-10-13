@@ -8,6 +8,7 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
+#include "io/mvs_camera.hpp"
 
 namespace srm::io
 {
@@ -17,6 +18,7 @@ enum class FrameSourceType      // 输入源类型(枚举类型，相当于一�
   image_file,
   video_file,
   opencv_camera,
+  mvs_camera,
 };
 
 const char * to_string(FrameSourceType type) noexcept;      // 将输入源类型转换为字符串
@@ -39,6 +41,7 @@ struct FrameSourceConfig
 
   // OpenCV VideoCapture 后端选择。默认 CAP_ANY，现场适配时可配置为指定后端。
   int api_preference = cv::CAP_ANY;
+  MvsCameraConfig mvs{};
 };
 
 // 单独的读取到的一帧数据
@@ -52,8 +55,7 @@ struct Frame
   double source_time_seconds = 0.0;     // 这一帧在源文件中的时间位置，单位为秒
 };
 
-// 输入抽象的第一版：支持离线图片、离线视频和 OpenCV camera index。
-// 海康 MVS 专用适配器不在本轮直接绑定，后续可在相同的 Frame 接口上接入。
+// 图片、视频、OpenCV camera index 和可选的海康 MVS 输入共用帧接口。
 class FrameSource final     // 用于打开输入源，读帧，加时间戳和序号
 {
 public:
@@ -81,6 +83,7 @@ public:
   const FrameSourceConfig & config() const noexcept;      // 返回输入源的配置
   const std::string & description() const noexcept;       // 返回输入源的描述字符串（输入源的描述字符串是拿来的？）
   double nominal_fps() const noexcept;                    // 名义帧率，文件输入时是文件的帧率，相机输入时是配置的帧率
+  const std::string & last_error() const noexcept;
 
 private:
   void open();                                            // 打开输入源
@@ -92,6 +95,8 @@ private:
   std::string description_;                 // 描述字符串
   cv::Mat image_;                           // 读取到的图片数据
   cv::VideoCapture capture_;                // OpenCV 视频捕获对象
+  std::unique_ptr<MvsCamera> mvs_camera_;
+  std::string last_error_;
   bool open_ = false;
   bool image_emitted_ = false;              // 这张图片有没有输出过
   bool end_of_stream_ = false;

@@ -108,6 +108,15 @@ int main(int argc, const char * const argv[])
       std::cout << srm::app::usage(argc > 0 ? argv[0] : nullptr);
       return EXIT_SUCCESS;
     }
+    if (options.list_cameras) {
+      std::cout << srm::io::list_mvs_cameras(options.frame_source.mvs.sdk_library);
+      return EXIT_SUCCESS;
+    }
+    if (options.camera_info) {
+      srm::io::MvsCamera camera(options.frame_source.mvs, 0, 0, 0.0, false);
+      std::cout << camera.report();
+      return EXIT_SUCCESS;
+    }
 
     if (!options.intrinsics_set) {
       std::cerr
@@ -118,6 +127,9 @@ int main(int argc, const char * const argv[])
     prepare_debug_directory(options.debug_directory);
 
     srm::io::FrameSource frame_source(options.frame_source);          // 图像输入模块
+    if (frame_source.type() == srm::io::FrameSourceType::mvs_camera) {
+      std::cerr << frame_source.description();
+    }
     srm::io::SelfAimTransport transport(options.transport);           // 串口通信模块
     srm::vision::TraditionalDetector detector;                        // 传统视觉检测模块
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
@@ -153,11 +165,17 @@ int main(int argc, const char * const argv[])
     if (!options.dry_run) transport.start();
 
     std::size_t processed_frames = 0;     // 已处理的帧数
+    bool acquisition_failed = false;
     while (!stop_requested.load()) {
       if (g_stop_requested != 0) break;
       last_detection.reset();                                       // 清理上一帧的检测结果
 
-      const auto result = runtime.step();                           // 返回的是一次处理结果的汇总
+      auto result = runtime.step();                           // 返回的是一次处理结果的汇总
+      if (!result.frame_read && frame_source.type() == srm::io::FrameSourceType::mvs_camera) {
+        result.error = frame_source.last_error();
+        acquisition_failed = true;
+        std::cerr << result.error << '\n';
+      }
       const srm::app::RuntimeTransportSnapshot transport_snapshot{  // 记录串口通信的统计信息，用于日志记录和统计
         transport.sent_frame_count(), transport.received_frame_count(),
         transport.communication_error_count()};
@@ -184,7 +202,7 @@ int main(int argc, const char * const argv[])
         }
       }
 
-      if (result.end_of_stream) break;                                                  // 调试视频结束了就退出        
+      if (result.end_of_stream || acquisition_failed) break;                            // EOF 或实时取流失败
       if (options.max_frames != 0 && processed_frames >= options.max_frames) break;     // 读到设定的最大帧数就退出
       if (!result.frame_read && (!options.dry_run && !transport.running())) break;      // 读不到帧了，且串口线程也没在运行，就退出
     }
@@ -200,7 +218,7 @@ int main(int argc, const char * const argv[])
     std::cerr << "processed_frames=" << processed_frames
               << " log_rows=" << logger.rows_written()
               << " dry_run=" << (options.dry_run ? 1 : 0) << '\n';
-    return EXIT_SUCCESS;
+    return acquisition_failed ? EXIT_FAILURE : EXIT_SUCCESS;
   } catch (const std::exception & error) {
     std::cerr << "srm_auto_aim_app: " << error.what() << '\n';
     return EXIT_FAILURE;

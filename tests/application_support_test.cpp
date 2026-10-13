@@ -141,6 +141,60 @@ void test_command_line_validation()
   assert(help.help);
 }
 
+void test_mvs_options()
+{
+  const auto selected = parse({"--input", "mvs", "--dry-run", "--mvs-serial", "SERIAL",
+    "--mvs-library", "/test/sdk.so", "--exposure-us", "2000", "--gain", "0",
+    "--camera-width", "1440", "--camera-height", "1080", "--camera-fps", "60",
+    "--pixel-format", "BayerRG8", "--camera-timeout-ms", "250"});
+  assert(selected.frame_source.type == FrameSourceType::mvs_camera);
+  assert(selected.frame_source.mvs.serial_number == "SERIAL");
+  assert(selected.frame_source.mvs.device_index == -1);
+  assert(selected.frame_source.mvs.sdk_library == "/test/sdk.so");
+  assert(selected.frame_source.mvs.exposure_us == 2000);
+  assert(selected.frame_source.mvs.gain == 0);
+  assert(selected.frame_source.mvs.pixel_format == "BayerRG8");
+  assert(selected.frame_source.mvs.timeout_ms == 250);
+  assert(selected.frame_source.width == 1440 && selected.frame_source.height == 1080);
+  assert(selected.frame_source.fps == 60);
+  const auto defaults = parse({"--input", "mvs"});
+  assert(!defaults.frame_source.mvs.exposure_us && !defaults.frame_source.mvs.gain);
+  assert(defaults.frame_source.mvs.pixel_format.empty());
+  assert(defaults.frame_source.width == 0 && defaults.frame_source.fps == 0);
+  assert(parse({"--list-cameras"}).list_cameras);
+  assert(parse({"--camera-info", "--mvs-index", "0"}).camera_info);
+
+  const std::vector<std::vector<std::string>> invalid{
+    {"--input", "mvs", "--dry-run", "--show-debug"},
+    {"--mvs-serial", "A", "--mvs-index", "0"}, {"--mvs-index", "-2"},
+    {"--camera-timeout-ms", "0"}, {"--camera-timeout-ms", "10001"},
+    {"--exposure-us", "0"}, {"--gain", "-1"}, {"--exposure-us", "nan"},
+    {"--camera-fps", "-1"}, {"--camera-fps", "inf"}, {"--camera-width", "-1"},
+    {"--camera-height", "2147483648"}, {"--list-cameras", "--camera-info"}};
+  for (const auto & args : invalid) {
+    bool rejected = false;
+    try { (void)parse_dynamic(args); } catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+
+  const auto path = "/tmp/shu_auto_aim_mvs_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream out(path);
+    out << "input.type=mvs\ninput.width=1440\ninput.height=1080\ninput.fps=30\n"
+        << "camera.mvs_serial=SERIAL\ncamera.mvs_index=-1\ncamera.mvs_library=/test/sdk.so\n"
+        << "camera.exposure_us=1000\ncamera.gain=4\ncamera.pixel_format=BayerRG8\n"
+        << "camera.timeout_ms=700\nruntime.dry_run=true\n";
+  }
+  const auto from_file = parse_dynamic({"--config", path});
+  assert(from_file.frame_source.mvs.exposure_us == 1000 && from_file.frame_source.mvs.gain == 4);
+  assert(from_file.frame_source.mvs.timeout_ms == 700 && from_file.frame_source.fps == 30);
+  const auto overridden = parse_dynamic({"--config", path, "--exposure-us", "default",
+    "--gain", "default", "--pixel-format", "default", "--camera-fps", "0"});
+  assert(!overridden.frame_source.mvs.exposure_us && !overridden.frame_source.mvs.gain);
+  assert(overridden.frame_source.mvs.pixel_format.empty() && overridden.frame_source.fps == 0);
+  ::unlink(path.c_str());
+}
+
 
 void test_config_file_and_cli_override()
 {
@@ -383,6 +437,7 @@ int main()
   test_command_line_options();
   test_debug_window_validation();
   test_command_line_validation();
+  test_mvs_options();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
   test_runtime_csv_missing_values();

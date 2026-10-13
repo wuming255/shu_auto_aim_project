@@ -1,6 +1,6 @@
 # 待确认问题与现场测试清单
 
-更新时间：2026-10-04
+更新时间：2026-10-13
 
 本文档记录当前开发中已经遇到、但仅靠本地环境无法最终确认的问题，以及项目主体开发完成后需要在现场 NUC、海康 CS016 相机和比赛下位机上集中执行的操作。
 
@@ -47,6 +47,16 @@
 - 实际设备拔插后的恢复时间；
 - 下位机对 yaw/pitch 目标和 `fire_flag` 的实际处理。
 
+### 6. MVS 已接入软件，SDK 头文件和实机采集仍需确认
+
+用户已提供的 NUC 观察记录：x86_64 Linux、`MV-CS016-10UC`、USB `2bdf:0001`、USB 链路 `5000M`、`lsusb` 可见相机；没有 `/dev/video*`，OpenCV camera index 无法打开；存在 `/opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3`，没有 MVS 图形客户端。这些是用户反馈的现场事实，未在当前开发机重验。
+
+当前软件通过 `--input mvs` 接入 USB SDK，提供 `--list-cameras`、`--camera-info`、序列号/索引选择和可选节点设置。提供的 4.7 Runtime 缺少开发头文件、采集示例与完整 API 文档；本地暂用参考项目头文件编译，已验证实际 `4.7.0.3` 符号、初始化/枚举和六种合成格式转 BGR，但未确认真实设备/帧结构的完整 ABI。需取得对应开发 SDK include 后重新构建，再做实机验证；不能把旧参考头文件与 Runtime 版本不同的问题记为已解决。
+
+本地无相机，真实 SDK 枚举结果为 0 台。模拟 SDK 验证了选择、参数范围/读回、缓冲释放和超时安全退出；这些结果不能代替 NUC 的枚举、独占打开、取流、颜色或性能测试。取流期间的相机错误会写出已配置的日志/摘要并退出失败；启动失败仅打印错误，不生成运行摘要。当前不自动重连；主机到帧时间戳不是曝光时间，一个缓存节点也不能证明处理的始终是最新帧。
+
+以下事项仍待现场记录：实际序列号/访问权限、开发头文件版本、SDK 模块加载、实际节点范围与访问模式、像素格式、曝光/增益/自动控制、实际 FPS、颜色正确性、延迟、持续采集和拔插行为。参数写入可能部分成功后失败，本轮不会回滚节点；调整前保存实际报告，调整后再次查询。共享 NUC 的权限或安装问题交由现场负责人确认，不默认执行管理员操作或修改系统规则。
+
 ## 二、需要用户后续确认的问题
 
 这些问题用于项目主体完成后的最终现场适配和验收准备。它们不作为当前每一轮软件开发的前置条件；在规则和正式通信协议已经明确的范围内，应先完成软件模块、自动化测试、离线验证和模拟验证。若最终现场条件与默认假设不一致，再根据现场结果调整配置或实现。
@@ -61,6 +71,8 @@
 - fmt/spdlog（后续日志可能使用）；
 - 海康 MVS SDK；
 - OpenVINO（传统视觉基线阶段可以暂不依赖，但后续可能使用）。
+
+NUC 的上述已知信息见第一部分第 6 项；实际系统版本、当前个人用户的 USB 访问权限、完整开发 SDK include 和模块环境仍待确认。当前 CMake 基线需要 C++17、CMake 和 OpenCV，不要求安装参考项目全部依赖。
 
 建议现场执行并保存输出：
 
@@ -102,12 +114,12 @@ udevadm info -q property -n /dev/ttyACM0 2>/dev/null || true
 
 - 相机是否确实为海康 `MV-CS016-10UC` 或比赛提供的兼容型号；
 - 使用的镜头型号和焦距；
-- MVS SDK 是否已安装并能被 MVS 工具枚举；
+- MVS 4.7 运行库、配套模块及对应开发头文件是否可用，程序能否枚举/独占打开；
 - 相机实际输出分辨率、像素格式和帧率；
 - 相机连接方式是 USB3、GigE 还是其他接口；
 - 现场是否允许使用自带相机/补光灯，若使用现场相机则是否允许调整曝光、增益和白平衡。
 
-建议先使用 MVS 工具完成一次不涉及本项目代码的采集检查，确认能够稳定显示连续图像。
+没有 MVS 图形客户端时直接使用本项目的枚举和参数查询入口；存在厂商工具时可另做交叉检查，不把安装客户端作为前置条件。具体命令见下方 C 项。
 
 ### 4. 标定数据
 
@@ -183,11 +195,30 @@ udevadm info -q property -n /dev/ttyACM0 2>/dev/null || true
 
 ### C. 相机输入测试
 
-1. 使用 MVS 工具确认相机可枚举；
-2. 使用后续本项目相机 smoke test 连续采集图像；
-3. 记录实际帧率、分辨率、曝光和增益；
-4. 检查图像是否存在丢帧、花屏、过曝、严重拖影或 USB/GigE 传输错误；
-5. 采集一组原始图像/视频作为离线传统视觉测试数据。
+在已通过本地软件验收的 NUC 构建上执行；先确认 CMake 打印 `SRM MVS input: enabled` 并记录头文件来源。构建方式见 [docs/deployment.md](docs/deployment.md#海康-mvs-构建与运行环境)。以下操作只在当前 shell 设置已有运行库路径，无需图形客户端或管理员权限：
+
+```bash
+export MVCAM_COMMON_RUNENV=/opt/MVS/lib
+export LD_LIBRARY_PATH="/opt/MVS/lib/64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+build/srm_auto_aim_app --list-cameras \
+  --mvs-library /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3
+build/srm_auto_aim_app --camera-info --mvs-serial ACTUAL_SERIAL \
+  --mvs-library /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3
+build/srm_auto_aim_app --input mvs --mvs-serial ACTUAL_SERIAL \
+  --mvs-library /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3 \
+  --dry-run --max-frames 120 --debug-dir replay_debug/mvs \
+  --debug-every 20 --log mvs.csv --summary mvs_summary.txt
+```
+
+`ACTUAL_SERIAL` 替换为枚举报告中的实际序列号；也可用 `--mvs-index N`，单台时可省略选择。list/info 提前退出、不启动 transport；采集必须保留 `--dry-run`。默认不改曝光/增益/白平衡/尺寸/帧率/像素格式，开始取流会切换连续模式并关闭触发。未配置内参的警告在采集 smoke test 中允许，但不得据此确认 PnP 或标定。
+
+1. 保存枚举报告、返回码、`lsusb -d 2bdf:0001` 和 `lsusb -t`；若系统可见而 SDK 为 0 台，检查 SDK 模块环境和当前用户 USB 访问权限。不要通过自动 reset 或修改系统规则尝试恢复。
+2. 保存 `--camera-info` 报告，包括 Width/Height/OffsetX/OffsetY、ExposureTime、Gain、AcquisitionFrameRate/ResultingFrameRate、PixelFormat、自动控制、TriggerMode 和节点读写模式。查询只打开，不设置/取流。
+3. 确认 120 帧采集返回码 0，摘要为 `processed_frames=120`、`error_count=0`、`nonzero_fire_request_count=0`、transport 收发计数 0；检查 CSV 列位、帧序号和主机时间戳，查看 debug 图像颜色、灯条和候选。debug 输出是检测叠加图，不等同于原始采集数据。
+4. 在许可调整参数的前提下，依据实际支持范围/增量和像素符号逐项添加宽高、FPS、曝光、增益或像素格式，并保存写入后的报告。不采用参考项目 150 FPS/曝光/增益作为默认结果；帧率节点读回与持续采集 FPS 分开记录。
+5. 做较长时间 dry-run，记录实际采集速率、处理耗时、颜色、丢帧/花屏/过曝/拖影和传输错误。主机取帧时间不含已知的设备曝光起点，整体延迟需另测；改尺寸/ROI 后重新核对标定。
+6. 在独立 dry-run 中测试断开/停止采集，确认等待在配置超时后失败、诊断明确、摘要非开火且 `end_of_stream_count=0`。当前程序失败退出，重新插入后由用户重新启动；不能记录为自动重连已通过。
+7. 使用已验证的厂商/录制工具另采集原始图像或短视频，保留尺寸、格式、曝光和帧率，作为离线视觉数据。当前 `--debug-dir` 仅保存检测叠加图。
 
 ### D. 标定与静态瞄准测试
 

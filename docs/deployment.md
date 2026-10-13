@@ -6,11 +6,11 @@
 
 当前软件交付边界：
 
-- 支持图片、视频文件和 OpenCV camera index 输入；
+- 支持图片、视频文件、OpenCV camera index 和可选 MVS USB 相机输入；
 - 支持正式自瞄 CDC 协议对应的 transport；
-- 支持 `--dry-run` 离线运行；
+- 支持 `--dry-run` 离线运行及不启动 CDC 的相机采集检查；
 - 默认不启用视觉开火，所有默认和异常路径保持 `fire_flag=0`；
-- 尚未在代码中绑定海康 MVS SDK，也不把现场标定参数写死。
+- MVS 软件适配已接入，真实相机采集和完整 SDK ABI 仍需最终确认；现场标定参数通过配置提供。
 
 ## 构建与自动化验收
 
@@ -40,12 +40,51 @@ CTest 至少应包含：
 - 应用配置、CSV、运行统计；
 - `srm_auto_aim_app` 离线 smoke test。
 
+MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误和采集失败摘要；测试不要求真实 SDK 或相机。当前默认有头文件构建为 15 项；关闭 MVS 或缺头文件时为 13 项。
+
 当前离线 smoke test 使用 `tests/data/application_smoke.ppm`，由 CTest 自动验证：
 
 - 程序能启动并处理一帧；
 - debug 图像、CSV 和 summary 文件能够生成；
 - summary 包含 `processed_frames=1`、`dry_run=1` 和 `nonzero_fire_request_count=0`；
 - 应用入口没有因为检测不到目标而产生非零开火请求。
+
+## 海康 MVS 构建与运行环境
+
+编译需要开发 SDK 的完整 include 目录（`MvCameraControl.h` 及其引用的 `CameraParams.h`、`PixelType.h`、错误和旧接口头文件），无需在编译时链接海康运行库。可在个人用户目录提供头文件：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+  -DSRM_ENABLE_MVS=ON -DSRM_MVS_INCLUDE_DIR="$HOME/sdk/MVS-4.7/include"
+cmake --build build -j2
+ctest --test-dir build --output-on-failure
+```
+
+将示例路径替换为实际开发 SDK include。CMake 自动搜索 `/opt/MVS/include`、`/opt/MvCamCtrlSDK/include`，最后尝试本地参考项目 `sp_vision_25-main/io/hikrobot/include`，并打印具体来源。参考项目目录被 gitignore 排除，不是干净 checkout 的必要组成部分；部署不能依赖它存在。没有头文件时默认降级为离线/OpenCV 构建，MVS 请求明确报不可用；`-DSRM_ENABLE_MVS=OFF` 可显式关闭。
+
+本次提供的 `MvCamCtrlSDK_Runtime-4.7.0_x86_64_20251113.tar.gz` 仅包含运行库和安装/环境脚本，缺少对应开发头文件、采集示例与完整 API 文档。已测得其库版本为 `4.7.0.3`，参考项目附带库为 `4.1.2.2`；当前本地编译使用参考头文件回退，只能证明已验证的符号、初始化、枚举和离线转换调用。版本门接受 `4.7.x`，无法证明所有 4.7 版本/帧结构 ABI 匹配；最终部署应补齐对应开发 SDK 头文件，并重新构建与验证。不得用参考项目 4.1 运行库替代本次运行库。
+
+运行需要保留整个 SDK `lib/64` 目录及配套文件；仅复制 `libMvCameraControl.so` 可能缺少 SDK 内部按需加载的 USB/转换模块。已存在 `/opt/MVS` 的 NUC 可在当前 shell 设置：
+
+```bash
+export MVCAM_COMMON_RUNENV=/opt/MVS/lib
+export LD_LIBRARY_PATH="/opt/MVS/lib/64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+build/srm_auto_aim_app --list-cameras \
+  --mvs-library /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3
+```
+
+用户目录解压的 SDK 同理把两处 `/opt/MVS` 换成实际根目录；`MVCAM_COMMON_RUNENV` 指向 `lib`，`LD_LIBRARY_PATH` 加入 `lib/64`。这些设置仅影响当前 shell，不需管理员权限；本项目不执行 `setup.sh`、`set_env_path.sh` 或 USB/system tuning 脚本。`--mvs-library` 仅指定主运行库，不替代模块搜索环境。图片/视频/OpenCV 输入不加载该库，`ldd build/srm_auto_aim_app` 不应出现海康直接依赖。
+
+有头文件构建还提供手动离线转换检查：
+
+```bash
+build/srm_mvs_sdk_conversion_test \
+  /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3
+```
+
+该程序加载真实 SDK，用合成设备描述建立未打开设备的本地句柄，检查 RGB8、Mono8 和四种 Bayer8 转 BGR 的长度与已知颜色；不枚举、不打开设备、不取流。它不纳入无运行库的默认 CTest，须设置同样的运行环境并显式传入库路径。通过不能代表真实帧布局、相机颜色或采集已经验证。
+
+NUC 枚举、参数查询和 120 帧 dry-run 命令见 [application.md](application.md#海康-mvs-usb-输入)，验证记录项目见根目录 [questions.md](../questions.md)。不指定曝光、增益、尺寸、FPS 或像素格式时保留设备当前值；先保存 `--camera-info` 的实际报告，再按节点范围和标定配置调整。
 
 ## 离线回放
 

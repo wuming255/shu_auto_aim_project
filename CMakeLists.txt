@@ -17,6 +17,16 @@ endif()
 set(SRM_OPENCV_LIBS ${OpenCV_LIBS})
 list(REMOVE_ITEM SRM_OPENCV_LIBS opencv_highgui)
 
+option(SRM_ENABLE_MVS "Build optional Hikrobot MVS USB camera input" ON)
+if(SRM_ENABLE_MVS AND UNIX AND NOT APPLE)
+  find_path(SRM_MVS_INCLUDE_DIR MvCameraControl.h
+    HINTS /opt/MVS/include /opt/MvCamCtrlSDK/include
+          "${CMAKE_CURRENT_SOURCE_DIR}/sp_vision_25-main/io/hikrobot/include")
+  if(SRM_MVS_INCLUDE_DIR STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/sp_vision_25-main/io/hikrobot/include")
+    message(STATUS "SRM MVS headers: reference fallback; full SDK 4.7 ABI requires matching development headers (see docs/deployment.md)")
+  endif()
+endif()
+
 add_library(srm_serial STATIC
   src/third_party/serial/src/serial.cc
   src/third_party/serial/src/impl/unix.cc
@@ -50,6 +60,7 @@ target_compile_options(srm_protocol PRIVATE
 
 add_library(srm_frame_source STATIC
   src/io/frame_source.cpp
+  src/io/mvs_camera.cpp
 )
 
 target_include_directories(srm_frame_source
@@ -59,6 +70,17 @@ target_include_directories(srm_frame_source
 )
 
 target_link_libraries(srm_frame_source PUBLIC ${SRM_OPENCV_LIBS})
+if(SRM_ENABLE_MVS AND UNIX AND NOT APPLE AND SRM_MVS_INCLUDE_DIR)
+  target_compile_definitions(srm_frame_source PRIVATE SRM_HAVE_MVS=1)
+  target_include_directories(srm_frame_source SYSTEM PRIVATE "${SRM_MVS_INCLUDE_DIR}")
+  target_link_libraries(srm_frame_source PRIVATE ${CMAKE_DL_LIBS})
+  message(STATUS "SRM MVS input: enabled (runtime loaded on demand); headers: ${SRM_MVS_INCLUDE_DIR}")
+else()
+  message(STATUS "SRM MVS input: unavailable (image/video/OpenCV supported)")
+  if(SRM_ENABLE_MVS AND UNIX AND NOT APPLE)
+    message(STATUS "For MVS input, set SRM_MVS_INCLUDE_DIR to the SDK development include directory")
+  endif()
+endif()
 
 target_compile_options(srm_frame_source PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
@@ -303,6 +325,30 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_frame_source_test COMMAND srm_frame_source_test)
+
+  if(SRM_ENABLE_MVS AND UNIX AND NOT APPLE AND SRM_MVS_INCLUDE_DIR)
+    add_library(srm_mvs_mock SHARED tests/mvs_mock_sdk.cpp)
+    target_include_directories(srm_mvs_mock SYSTEM PRIVATE "${SRM_MVS_INCLUDE_DIR}")
+    add_library(srm_mvs_missing_symbol SHARED tests/mvs_missing_symbol.cpp)
+    add_executable(srm_mvs_camera_test tests/mvs_camera_test.cpp)
+    target_include_directories(srm_mvs_camera_test SYSTEM PRIVATE "${SRM_MVS_INCLUDE_DIR}")
+    target_link_libraries(srm_mvs_camera_test PRIVATE srm_frame_source srm_mvs_mock)
+    # 显式传入真实运行库执行离线像素转换；不纳入无 SDK 的默认 CTest。
+    add_executable(srm_mvs_sdk_conversion_test tests/mvs_sdk_conversion_test.cpp)
+    target_include_directories(srm_mvs_sdk_conversion_test SYSTEM PRIVATE "${SRM_MVS_INCLUDE_DIR}")
+    target_link_libraries(srm_mvs_sdk_conversion_test PRIVATE ${CMAKE_DL_LIBS})
+    foreach(target srm_mvs_mock srm_mvs_missing_symbol srm_mvs_camera_test srm_mvs_sdk_conversion_test)
+      target_compile_options(${target} PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>)
+    endforeach()
+    add_test(NAME srm_mvs_camera_test COMMAND srm_mvs_camera_test
+      $<TARGET_FILE:srm_mvs_mock> $<TARGET_FILE:srm_mvs_missing_symbol>)
+    add_test(NAME srm_mvs_app_smoke_test COMMAND ${CMAKE_COMMAND}
+      -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+      -DSDK=$<TARGET_FILE:srm_mvs_mock>
+      -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/mvs_smoke
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/mvs_smoke.cmake)
+  endif()
 
   add_executable(srm_traditional_detector_test
     tests/traditional_detector_test.cpp

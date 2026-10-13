@@ -23,6 +23,7 @@ void validate_config(const FrameSourceConfig & config)    // 检查配置是否�
   if (config.fps < 0.0 || !std::isfinite(config.fps)) {   // 有限的帧率
     throw std::invalid_argument("frame source fps must be finite and non-negative");
   }
+  if (config.type == FrameSourceType::mvs_camera) validate_mvs_config(config.mvs);
 
   if (
     (config.type == FrameSourceType::image_file || config.type == FrameSourceType::video_file) &&       // 要有文件路径
@@ -49,6 +50,8 @@ const char * to_string(FrameSourceType type) noexcept       // 将输入源类�
       return "video_file";
     case FrameSourceType::opencv_camera:
       return "opencv_camera";
+    case FrameSourceType::mvs_camera:
+      return "mvs_camera";
     default:
       return "unknown";
   }
@@ -69,6 +72,9 @@ FrameSource::FrameSource(FrameSourceConfig config) : config_(std::move(config))
       description_ = "opencv_camera:" +
                      (config_.uri.empty() ? std::to_string(config_.camera_index) : config_.uri);
       break;
+    case FrameSourceType::mvs_camera:
+      description_ = "mvs_camera";
+      break;
     default:
       throw std::invalid_argument("unsupported frame source type");
   }
@@ -83,6 +89,13 @@ FrameSource::~FrameSource()
 
 void FrameSource::open()
 {
+  if (config_.type == FrameSourceType::mvs_camera) {
+    mvs_camera_ = std::make_unique<MvsCamera>(config_.mvs, config_.width, config_.height, config_.fps);
+    description_ = mvs_camera_->report();
+    nominal_fps_ = mvs_camera_->nominal_fps();
+    open_ = true;
+    return;
+  }
   if (config_.type == FrameSourceType::image_file) {
     image_ = cv::imread(config_.uri, cv::IMREAD_COLOR);     // 读一帧彩色图片
     if (image_.empty()) {
@@ -123,6 +136,11 @@ bool FrameSource::read(Frame & frame)
   bool success = false;
   if (config_.type == FrameSourceType::image_file) {    // 按类型读取帧
     success = read_image(next);
+  } else if (mvs_camera_) {
+    success = mvs_camera_->read(next.bgr, next.timestamp);
+    last_error_ = mvs_camera_->last_error();
+    // 实时采集失败不是文件 EOF；不输出上一次的图像。
+    if (success) stamp(next, 0.0);
   } else {
     success = read_capture(next);
   }
@@ -194,7 +212,8 @@ bool FrameSource::read_capture(Frame & frame)
 
 void FrameSource::stamp(Frame & frame, double source_time_seconds)
 {
-  auto timestamp = std::chrono::steady_clock::now();
+  auto timestamp = frame.timestamp == std::chrono::steady_clock::time_point{}
+                     ? std::chrono::steady_clock::now() : frame.timestamp;
   if (last_timestamp_ != std::chrono::steady_clock::time_point{} && timestamp <= last_timestamp_) {     // 不是新时间且当前时间在上次时间前
     timestamp = last_timestamp_ + kTimestampStep;
   }     // 防御性保护，一般不会读到提前的，有时候不小心读到两张一样的倒是有可能
@@ -211,6 +230,7 @@ void FrameSource::reset()
   end_of_stream_ = false;
   next_sequence_ = 0;
   last_timestamp_ = {};
+  last_error_.clear();
 
   if (config_.type == FrameSourceType::image_file) return;
 
@@ -248,5 +268,7 @@ double FrameSource::nominal_fps() const noexcept
 {
   return nominal_fps_;
 }
+
+const std::string & FrameSource::last_error() const noexcept { return last_error_; }
 
 }  // namespace srm::io

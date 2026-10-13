@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace srm::app
 {
@@ -83,7 +84,8 @@ io::FrameSourceType parse_input_type(const std::string & value, const char * opt
   if (value == "image") return io::FrameSourceType::image_file;
   if (value == "video") return io::FrameSourceType::video_file;
   if (value == "camera") return io::FrameSourceType::opencv_camera;
-  throw std::invalid_argument(std::string(option) + " must be image, video or camera");
+  if (value == "mvs") return io::FrameSourceType::mvs_camera;
+  throw std::invalid_argument(std::string(option) + " must be image, video, camera or mvs");
 }
 
 void parse_intrinsics(ApplicationOptions & options, const std::string & text, const char * option)  // 读取相机内参
@@ -152,11 +154,48 @@ void set_playback_fps(ApplicationOptions & options, const std::string & text, co
   options.playback_fps = value;
 }
 
+void set_camera_integer(int & destination, const std::string & text, const char * option, int minimum = 0)
+{
+  const auto value = parse_integer(text, option);
+  if (value < minimum || value > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(std::string(option) + " is outside the supported range");
+  }
+  destination = static_cast<int>(value);
+}
+
+void set_camera_float(std::optional<double> & destination, const std::string & text, const char * option)
+{
+  if (text == "default") destination.reset();
+  else destination = parse_double(text, option);
+}
+
+bool apply_camera_entry(ApplicationOptions & options, const std::string & key,
+                        const std::string & value, const char * context)
+{
+  auto & source = options.frame_source;
+  if (key == "input.width") set_camera_integer(source.width, value, context);
+  else if (key == "input.height") set_camera_integer(source.height, value, context);
+  else if (key == "input.fps") source.fps = parse_double(value, context);
+  else if (key == "camera.mvs_serial") source.mvs.serial_number = value;
+  else if (key == "camera.mvs_index") set_camera_integer(source.mvs.device_index, value, context, -1);
+  else if (key == "camera.mvs_library") source.mvs.sdk_library = value;
+  else if (key == "camera.exposure_us") set_camera_float(source.mvs.exposure_us, value, context);
+  else if (key == "camera.gain") set_camera_float(source.mvs.gain, value, context);
+  else if (key == "camera.pixel_format") source.mvs.pixel_format = value == "default" ? "" : value;
+  else if (key == "camera.timeout_ms") {
+    const auto parsed = parse_integer(value, context);
+    if (parsed < 1 || parsed > 10000) throw std::invalid_argument(std::string(context) + " must be within [1, 10000]");
+    source.mvs.timeout_ms = static_cast<unsigned int>(parsed);
+  } else return false;
+  return true;
+}
+
 void apply_config_entry(
   ApplicationOptions & options, const std::string & key, const std::string & value,
   std::size_t line_number)
 {
   const std::string context = "config line " + std::to_string(line_number) + " (" + key + ")";
+  if (apply_camera_entry(options, key, value, context.c_str())) return;
   if (key == "input.type") {
     options.frame_source.type = parse_input_type(value, context.c_str());
   } else if (key == "input.source") {
@@ -204,6 +243,14 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
 {
   if (options.help) return;
 
+  if (options.list_cameras && options.camera_info) throw std::invalid_argument("choose --list-cameras or --camera-info");
+  io::validate_mvs_config(options.frame_source.mvs);
+  if (options.frame_source.width < 0 || options.frame_source.height < 0 ||
+      options.frame_source.fps < 0 || !std::isfinite(options.frame_source.fps)) {
+    throw std::invalid_argument("camera dimensions/fps must be finite and non-negative");
+  }
+  if (options.list_cameras || options.camera_info) return;
+
   const auto type = options.frame_source.type;
   if ((type == io::FrameSourceType::image_file || type == io::FrameSourceType::video_file) &&
       options.frame_source.uri.empty()) {
@@ -223,7 +270,8 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   if (options.debug_every == 0) {
     throw std::invalid_argument("debug frame interval must be positive");
   }
-  if (options.show_debug && (!options.dry_run || type == io::FrameSourceType::opencv_camera)) {
+  if (options.show_debug && (!options.dry_run ||
+      (type != io::FrameSourceType::image_file && type != io::FrameSourceType::video_file))) {
     throw std::invalid_argument("--show-debug requires --dry-run and image/video input");
   }
   if (!options.show_debug && (options.start_paused || options.playback_fps != 0.0)) {
@@ -299,6 +347,26 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       options.help = true;
       continue;
     }
+    if (argument == "--list-cameras" || argument == "--camera-info") {
+      if (argument == "--list-cameras") options.list_cameras = true;
+      else options.camera_info = true;
+      continue;
+    }
+    const std::pair<const char *, const char *> camera_options[] = {
+      {"--camera-width", "input.width"}, {"--camera-height", "input.height"},
+      {"--camera-fps", "input.fps"}, {"--mvs-serial", "camera.mvs_serial"},
+      {"--mvs-index", "camera.mvs_index"}, {"--mvs-library", "camera.mvs_library"},
+      {"--exposure-us", "camera.exposure_us"}, {"--gain", "camera.gain"},
+      {"--pixel-format", "camera.pixel_format"}, {"--camera-timeout-ms", "camera.timeout_ms"}};
+    bool camera_option = false;
+    for (const auto & entry : camera_options) {
+      if (argument != entry.first) continue;
+      (void)apply_camera_entry(options, entry.second,
+        require_value(index, argc, argv, entry.first), entry.first);
+      camera_option = true;
+      break;
+    }
+    if (camera_option) continue;
     if (argument == "--dry-run") {
       options.dry_run = true;
       continue;
@@ -409,9 +477,21 @@ std::string usage(const char * program_name)
   stream
     << "Usage: " << program << " [options]\n"
     << "  --config PATH               key=value configuration file\n"
-    << "  --input image|video|camera  input mode (default: camera)\n"
+    << "  --input image|video|camera|mvs  input mode (default: OpenCV camera)\n"
     << "  --source PATH               image/video path\n"
     << "  --camera-index N            OpenCV camera index (default: 0)\n"
+    << "  --list-cameras              list MVS USB cameras and SDK version; exit\n"
+    << "  --camera-info               query selected MVS camera nodes; exit (no grabbing)\n"
+    << "  --mvs-serial SERIAL         select MVS USB camera by serial number\n"
+    << "  --mvs-index N               MVS list index; -1=auto only if one camera\n"
+    << "  --mvs-library PATH          MVS 4.7.x runtime .so (loaded on demand)\n"
+    << "  --camera-width N            requested width; 0=keep current\n"
+    << "  --camera-height N           requested height; 0=keep current\n"
+    << "  --camera-fps FPS            requested acquisition rate; 0=keep current\n"
+    << "  --exposure-us US|default    MVS manual exposure in microseconds; default=keep\n"
+    << "  --gain VALUE|default        MVS manual gain (camera node units); default=keep\n"
+    << "  --pixel-format NAME|default  MVS GenICam PixelFormat; default=keep\n"
+    << "  --camera-timeout-ms N       MVS read timeout in [1,10000] (default: 1000)\n"
     << "  --device PATH               USB CDC device (default: /dev/ttyACM0)\n"
     << "  --intrinsics fx,fy,cx,cy    camera intrinsic parameters\n"
     << "  --log PATH                  write CSV runtime log\n"

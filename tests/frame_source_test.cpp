@@ -132,6 +132,21 @@ void test_invalid_configuration(const std::string & path)
   assert(bad_fps_threw);
 }
 
+void test_mvs_unavailable()
+{
+  FrameSourceConfig config;
+  config.type = FrameSourceType::mvs_camera;
+  config.mvs.sdk_library = "/nonexistent/srm_mvs_runtime.so";
+  bool caught = false;
+  try { FrameSource source(config); } catch (const std::runtime_error & error) {
+    caught = true;
+    const std::string message = error.what();
+    assert(message.find(srm::io::mvs_compiled() ? "runtime unavailable" :
+                       "support is unavailable in this build") != std::string::npos);
+  }
+  assert(caught);
+}
+
 }  // namespace
 
 int main()
@@ -144,6 +159,7 @@ int main()
   test_looping_image_source(path);
   test_compatibility_read(path);
   test_invalid_configuration(path);
+  test_mvs_unavailable();
 
   std::remove(path.c_str());
   return 0;

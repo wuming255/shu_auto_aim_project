@@ -15,9 +15,11 @@ struct ApplicationOptions
   io::FrameSourceConfig frame_source;   // 输入源相关配置文件
   io::TransportConfig transport;        // 串口通信相关配置文件
 
-  // 只用于不启动串口线程的离线运行；安全控制器仍会因为 transport 未运行而拒绝瞄准命令。
+  // 不启动串口线程的文件回放/相机检查；安全控制器会拒绝瞄准命令。
   bool dry_run = false;                 // 是否为离线运行模式
   bool help = false;                    // 是否显示帮助信息
+  bool list_cameras = false;  // 枚举 MVS USB 设备后退出，不打开相机/CDC。
+  bool camera_info = false;   // 打开 MVS 相机并查询节点后退出，不修改节点/取流/CDC。
   std::string config_path;
   std::string log_path;
   std::string debug_directory;
