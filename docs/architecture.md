@@ -158,7 +158,14 @@ MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选�
 
 ## 可选离线窗口调试
 
-- `src/app/debug_viewer.*` 在应用层显示 `draw_debug()` 图像和 `DetectionResult::brightness_mask`，管理播放节奏、暂停、单步、退出和窗口清理；算法层和输入层不调用 GUI。
-- `--show-debug` 默认关闭，只支持 dry-run 图片/视频；显示每帧，与 debug 文件保存频率独立。窗口等待期间不调用运行时，不重复记日志或处理当前帧。
+- `src/app/debug_viewer.*` 在应用层显示 `draw_debug()` 图像和 `DetectionResult::brightness_mask`；文件回放管理播放节奏、暂停、单步，实时相机只调用一次 `waitKey(1)` 处理 GUI 事件，不进入回放等待循环。算法层和输入层不调用 GUI。
+- `--show-debug` 默认关闭，仅用于 dry-run；显示每帧，与 debug 文件保存频率独立。文件暂停期间不调用运行时，不重复记日志或录像；实时预览仅接受退出操作。
 - HighGUI 只链接到应用窗口实现，CMake 可自动降级为非 GUI 构建或通过 `SRM_ENABLE_GUI=OFF` 禁用。未启用窗口的路径无需桌面显示服务。
 - 播放和暂停不改变 `FrameSource` 的单调时间戳定义，窗口回放的检测观察不等同于预测、弹道或现场性能验证。
+
+## 原始 BGR 录像（第十九轮）
+
+- `src/app/video_recorder.*` 为独立应用层 RAII 录像器，使用 OpenCV FFmpeg VideoWriter，默认关闭、仅允许 dry-run。每个成功读取的帧同步写一次；不改动输入层、检测器或运行时协议。
+- 输入为 `Frame.bgr`，在绘制检测叠加图前写入；不添加四元数/姿态文本。参考 Recorder 的原图保存用途，CSV 仍单独记录现有运行结果和主机时间。
+- 先以独占临时文件存放 AVI，封口后 fsync 并完整解码校验尺寸/帧数，再以同目录硬链接无覆盖发布。异常保留 partial 路径，正常调用显式 `close()` 检查错误，析构提供兜底清理。
+- 录像 FPS 是恒定播放元数据，不限速、不插帧、不假设曝光时间；`step_duration_us` 不包含应用层编码、GUI 或退出校验耗时。

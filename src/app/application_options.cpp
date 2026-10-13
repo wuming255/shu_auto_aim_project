@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -231,6 +232,12 @@ void apply_config_entry(
     options.start_paused = parse_bool(value, context.c_str());
   } else if (key == "runtime.playback_fps") {
     set_playback_fps(options, value, context.c_str());
+  } else if (key == "runtime.record") {
+    options.record_path = value;
+  } else if (key == "runtime.record_fps") {
+    options.record_fps = parse_double(value, context.c_str());
+  } else if (key == "runtime.record_codec") {
+    options.record_codec = value;
   } else if (key == "camera.intrinsics") {
     parse_intrinsics(options, value, context.c_str());
   } else {
@@ -270,12 +277,35 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   if (options.debug_every == 0) {
     throw std::invalid_argument("debug frame interval must be positive");
   }
-  if (options.show_debug && (!options.dry_run ||
-      (type != io::FrameSourceType::image_file && type != io::FrameSourceType::video_file))) {
-    throw std::invalid_argument("--show-debug requires --dry-run and image/video input");
+  if (options.show_debug && !options.dry_run) {
+    throw std::invalid_argument("--show-debug requires --dry-run");
+  }
+  const bool realtime = type == io::FrameSourceType::opencv_camera || type == io::FrameSourceType::mvs_camera;
+  if (realtime && (options.start_paused || options.playback_fps != 0.0)) {
+    throw std::invalid_argument("camera preview does not support --start-paused or --playback-fps");
   }
   if (!options.show_debug && (options.start_paused || options.playback_fps != 0.0)) {
     throw std::invalid_argument("--start-paused and --playback-fps require --show-debug");
+  }
+  if (!options.record_path.empty() && !options.dry_run) {
+    throw std::invalid_argument("--record requires --dry-run (synchronous debug recording)");
+  }
+  if (!options.record_path.empty()) {
+    const auto recording = std::filesystem::weakly_canonical(std::filesystem::absolute(options.record_path));
+    for (const auto & output : {options.log_path, options.summary_path}) {
+      if (!output.empty() && recording == std::filesystem::weakly_canonical(std::filesystem::absolute(output))) {
+        throw std::invalid_argument("recording path conflicts with log/summary path");
+      }
+    }
+  }
+  if (!std::isfinite(options.record_fps) || options.record_fps < 0.0 ||
+      options.record_fps > 1000.0 || (options.record_fps > 0.0 && options.record_fps < 0.1)) {
+    throw std::invalid_argument("--record-fps must be 0 (auto) or within [0.1, 1000]");
+  }
+  if (options.record_codec.size() != 4 ||
+      !std::all_of(options.record_codec.begin(), options.record_codec.end(),
+                   [](unsigned char c) { return std::isalnum(c); })) {
+    throw std::invalid_argument("--record-codec must be a four-character codec such as MJPG or FFV1");
   }
 }
 
@@ -369,6 +399,22 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
     if (camera_option) continue;
     if (argument == "--dry-run") {
       options.dry_run = true;
+      continue;
+    }
+    if (argument == "--record") {
+      options.record_path = require_value(index, argc, argv, "--record");
+      continue;
+    }
+    if (argument == "--no-record") {
+      options.record_path.clear();
+      continue;
+    }
+    if (argument == "--record-fps") {
+      options.record_fps = parse_double(require_value(index, argc, argv, "--record-fps"), "--record-fps");
+      continue;
+    }
+    if (argument == "--record-codec") {
+      options.record_codec = require_value(index, argc, argv, "--record-codec");
       continue;
     }
     if (argument == "--live") {
@@ -498,11 +544,15 @@ std::string usage(const char * program_name)
     << "  --summary PATH              write key=value replay summary\n"
     << "  --debug-dir PATH            save detector debug images\n"
     << "  --debug-every N             save every Nth frame (default: 1)\n"
-    << "  --show-debug/--no-show-debug  optional windows; dry-run image/video only\n"
+    << "  --show-debug/--no-show-debug  dry-run windows; camera preview has no pause/pacing\n"
     << "  --playback-fps FPS          window playback rate; 0=source or 30 (default)\n"
     << "                             nonzero FPS must be within [0.1, 1000]\n"
     << "  --start-paused/--no-start-paused  pause on the first displayed frame\n"
     << "                             keys: Space=pause, n=step, q/Esc=quit\n"
+    << "  --record PATH               save raw BGR frames to a new .avi (dry-run only)\n"
+    << "  --no-record                 disable recording configured in a file\n"
+    << "  --record-fps FPS            video metadata rate; 0=source or 30, no capture pacing\n"
+    << "  --record-codec FOURCC       FFmpeg encoder (default: MJPG; lossless: FFV1)\n"
     << "  --max-frames N              stop after N frames; 0 means no limit\n"
     << "  --loop/--no-loop            enable or disable image/video looping\n"
     << "  --dry-run/--live            disable or enable transport startup\n"

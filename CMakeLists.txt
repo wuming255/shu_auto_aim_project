@@ -255,6 +255,7 @@ target_compile_options(srm_auto_aim_runtime PRIVATE
 )
 
 add_library(srm_app_support STATIC
+  src/app/video_recorder.cpp
   src/app/application_options.cpp
   src/app/runtime_csv_logger.cpp
   src/app/runtime_statistics.cpp
@@ -431,6 +432,17 @@ if(BUILD_TESTING)
   )
   add_test(NAME srm_application_support_test COMMAND srm_application_support_test)
 
+  add_executable(srm_video_recording_test tests/video_recording_test.cpp)
+  target_link_libraries(srm_video_recording_test PRIVATE srm_app_support)
+  target_compile_options(srm_video_recording_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>)
+  add_test(NAME srm_video_recording_test COMMAND srm_video_recording_test)
+  add_test(NAME srm_recording_app_smoke_test COMMAND ${CMAKE_COMMAND}
+    -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+    -DVERIFY=$<TARGET_FILE:srm_video_recording_test>
+    -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/recording_smoke
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_smoke.cmake)
+
   add_test(
     NAME srm_application_app_smoke_test
     COMMAND ${CMAKE_COMMAND}
@@ -439,4 +451,15 @@ if(BUILD_TESTING)
       -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/application_smoke
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_smoke.cmake
   )
+
+  set(SRM_LAUNCHER_TEST_SDK_ARGS)
+  if(TARGET srm_mvs_mock)
+    list(APPEND SRM_LAUNCHER_TEST_SDK_ARGS -DSDK=$<TARGET_FILE:srm_mvs_mock>)
+  endif()
+  add_test(NAME srm_launcher_smoke_test COMMAND ${CMAKE_COMMAND}
+    -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
+    -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+    -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/launcher_smoke
+    ${SRM_LAUNCHER_TEST_SDK_ARGS}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_smoke.cmake)
 endif()

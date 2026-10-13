@@ -81,7 +81,9 @@ void test_debug_window_validation()
   // 交互不能暂停实时控制；无窗口时也不能静默忽略播放参数。
   const std::vector<std::vector<std::string>> invalid_arguments{
     {"--input", "video", "--source", "x.avi", "--show-debug"},
-    {"--input", "camera", "--dry-run", "--show-debug"},
+    {"--input", "camera", "--live", "--show-debug"},
+    {"--input", "mvs", "--dry-run", "--show-debug", "--start-paused"},
+    {"--input", "camera", "--dry-run", "--show-debug", "--playback-fps", "30"},
     {"--start-paused"},
     {"--playback-fps", "12"},
     {"--playback-fps", "-1"},
@@ -101,6 +103,10 @@ void test_debug_window_validation()
 
   const auto image = parse({"--input", "image", "--source", "x.png", "--dry-run", "--show-debug"});
   assert(image.show_debug && image.playback_fps == 0.0);
+  for (const auto * type : {"mvs", "camera"}) {
+    const auto realtime = parse({"--input", type, "--dry-run", "--show-debug"});
+    assert(realtime.show_debug && !realtime.start_paused && realtime.playback_fps == 0.0);
+  }
 }
 
 void test_command_line_validation()
@@ -165,7 +171,7 @@ void test_mvs_options()
   assert(parse({"--camera-info", "--mvs-index", "0"}).camera_info);
 
   const std::vector<std::vector<std::string>> invalid{
-    {"--input", "mvs", "--dry-run", "--show-debug"},
+    {"--input", "mvs", "--live", "--show-debug"},
     {"--mvs-serial", "A", "--mvs-index", "0"}, {"--mvs-index", "-2"},
     {"--camera-timeout-ms", "0"}, {"--camera-timeout-ms", "10001"},
     {"--exposure-us", "0"}, {"--gain", "-1"}, {"--exposure-us", "nan"},
@@ -192,6 +198,35 @@ void test_mvs_options()
     "--gain", "default", "--pixel-format", "default", "--camera-fps", "0"});
   assert(!overridden.frame_source.mvs.exposure_us && !overridden.frame_source.mvs.gain);
   assert(overridden.frame_source.mvs.pixel_format.empty() && overridden.frame_source.fps == 0);
+  ::unlink(path.c_str());
+}
+
+void test_recording_options()
+{
+  const auto options = parse({"--input", "mvs", "--dry-run", "--record", "raw.avi",
+                             "--record-fps", "25", "--record-codec", "FFV1", "--show-debug"});
+  assert(options.record_path == "raw.avi" && options.record_fps == 25 && options.record_codec == "FFV1");
+  assert(parse({"--record", "raw.avi", "--no-record"}).record_path.empty());
+  const std::vector<std::vector<std::string>> invalid{
+    {"--record", "raw.avi", "--live"}, {"--record-fps", "-1"}, {"--record-fps", "nan"},
+    {"--record-fps", "0.01"}, {"--record-fps", "1001"}, {"--record-codec", "MJPEG"},
+    {"--record-codec", "?bad"}, {"--record"},
+    {"--dry-run", "--record", "./alias.avi", "--summary", "alias.avi"}};
+  for (const auto & arguments : invalid) {
+    bool rejected = false;
+    try { (void)parse_dynamic(arguments); } catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+  const auto path = "/tmp/shu_auto_aim_record_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream config(path);
+    config << "input.type=mvs\nruntime.dry_run=true\nruntime.show_debug=true\n"
+           << "runtime.record=raw.avi\nruntime.record_fps=60\nruntime.record_codec=MJPG\n";
+  }
+  const auto configured = parse_dynamic({"--config", path});
+  assert(configured.show_debug && configured.record_path == "raw.avi" && configured.record_fps == 60);
+  const auto overridden = parse_dynamic({"--config", path, "--no-record", "--record-fps", "0"});
+  assert(overridden.record_path.empty() && overridden.record_fps == 0);
   ::unlink(path.c_str());
 }
 
@@ -438,6 +473,7 @@ int main()
   test_debug_window_validation();
   test_command_line_validation();
   test_mvs_options();
+  test_recording_options();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
   test_runtime_csv_missing_values();

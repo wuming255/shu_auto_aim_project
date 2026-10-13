@@ -158,7 +158,7 @@ int MV_CC_SetBoolValue(void *, const char *, bool value) { ++counts["set_bool"];
 int MV_CC_GetImageBuffer(void *, MV_FRAME_OUT * frame, unsigned int timeout)
 {
   ++counts["read"]; counts["timeout_ms"] = timeout;
-  if (failing("read")) return MV_E_NODATA;
+  if (failing("read") || (failing("read_after_two") && counts["read"] > 2)) return MV_E_NODATA;
   if (borrowed) return MV_E_CALLORDER;
   borrowed = true;
   *frame = {};

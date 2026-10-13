@@ -11,13 +11,14 @@
 namespace srm::app
 {
 
-// 应用层的可选回放窗口；检测、读帧和调试图保存仍不依赖 GUI。
+// 应用层的可选 dry-run 窗口；相机只处理 GUI 事件，文件回放可暂停/限速。
 class DebugViewer final
 {
 public:
   static bool available() noexcept;
+  static void check_environment();
 
-  explicit DebugViewer(double playback_fps, bool start_paused);
+  explicit DebugViewer(double playback_fps, bool start_paused, bool realtime = false);
   ~DebugViewer();
 
   DebugViewer(const DebugViewer &) = delete;
@@ -37,6 +38,7 @@ private:
 
   std::chrono::steady_clock::duration frame_period_{};
   bool paused_ = false;
+  bool realtime_ = false;
   bool windows_created_ = false;
   bool sized_ = false;
 };

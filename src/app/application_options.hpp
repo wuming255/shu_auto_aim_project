@@ -27,10 +27,14 @@ struct ApplicationOptions
   std::size_t max_frames = 0;  // 最大处理帧数，0 表示直到 EOF 或收到停止信号。
   std::size_t debug_every = 1;  // 每隔多少帧保存一张 debug 图像。
 
-  // 窗口交互仅用于 dry-run 文件回放，避免暂停实时控制循环。
+  // 窗口仅用于 dry-run；相机预览不暂停、不按 playback_fps 限速。
   bool show_debug = false;
   bool start_paused = false;
   double playback_fps = 0.0;  // 0 使用视频名义帧率，不可用时回退到 30 FPS。
+
+  std::string record_path;  // 空值关闭；保存未经检测绘制的 BGR 帧。
+  double record_fps = 0.0;  // 0 使用输入名义帧率，不可用时回退到 30 FPS。
+  std::string record_codec = "MJPG";
 
   // 没有提供标定内参时保留 PoseSolver 的默认矩阵，并由主程序打印提示。
   bool intrinsics_set = false;      // 是否设置了相机内参

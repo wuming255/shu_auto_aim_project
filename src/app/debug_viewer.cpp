@@ -32,28 +32,37 @@ bool DebugViewer::available() noexcept
 #endif
 }
 
-DebugViewer::DebugViewer(double playback_fps, bool start_paused) : paused_(start_paused)
+void DebugViewer::check_environment()
 {
   if (!available()) {
     throw std::runtime_error(
       "debug windows are unavailable in this build; use --no-show-debug or rebuild "
       "with SRM_ENABLE_GUI=ON and OpenCV HighGUI");
   }
-  if (!std::isfinite(playback_fps) || playback_fps <= 0.0) {
-    throw std::invalid_argument("debug viewer requires a finite positive playback rate");
-  }
-  frame_period_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-    std::chrono::duration<double>(1.0 / std::clamp(playback_fps, 0.1, 1000.0)));
-
-#ifdef SRM_HAVE_HIGHGUI
-#if defined(__linux__)
+#if defined(SRM_HAVE_HIGHGUI) && defined(__linux__)
   const auto display = std::getenv("DISPLAY");
   const auto wayland = std::getenv("WAYLAND_DISPLAY");
   if ((display == nullptr || *display == '\0') && (wayland == nullptr || *wayland == '\0')) {
     throw std::runtime_error(
-      "--show-debug requires a desktop display; use --no-show-debug for headless replay");
+      "--show-debug requires a desktop display; use --no-show-debug for headless input");
   }
 #endif
+}
+
+DebugViewer::DebugViewer(double playback_fps, bool start_paused, bool realtime)
+  : paused_(start_paused), realtime_(realtime)
+{
+  check_environment();
+  if (realtime_) {
+    if (start_paused) throw std::invalid_argument("realtime preview cannot start paused");
+  } else {
+    if (!std::isfinite(playback_fps) || playback_fps <= 0.0) {
+      throw std::invalid_argument("debug viewer requires a finite positive playback rate");
+    }
+    frame_period_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(1.0 / std::clamp(playback_fps, 0.1, 1000.0)));
+  }
+#ifdef SRM_HAVE_HIGHGUI
   try {
     cv::namedWindow(kDetectionWindow, cv::WINDOW_NORMAL);
     windows_created_ = true;
@@ -108,8 +117,8 @@ void DebugViewer::show_drawing(
     display, info.str(), {10, 23}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 1,
     cv::LINE_AA);
   cv::putText(
-    display, std::string(paused_ ? "PAUSED" : "PLAYING") +
-               " | Space: pause/resume  n: next  q/Esc: quit",
+    display, realtime_ ? "LIVE PREVIEW | q/Esc: quit" :
+      std::string(paused_ ? "PAUSED" : "PLAYING") + " | Space: pause/resume  n: next  q/Esc: quit",
     {10, 49}, cv::FONT_HERSHEY_SIMPLEX, 0.5, {0, 255, 255}, 1, cv::LINE_AA);
   cv::imshow(kDetectionWindow, display);
   if (!sized_) {
@@ -152,6 +161,7 @@ bool DebugViewer::show_and_wait(
   const vision::DetectionResult * detection, const std::function<bool()> & stop_requested)
 {
 #ifdef SRM_HAVE_HIGHGUI
+  if (stop_requested() || (sized_ && !windows_open())) return false;
   show_drawing(drawing, frame, detection);
   const cv::Mat mask = detection != nullptr && !detection->brightness_mask.empty()
                          ? detection->brightness_mask
@@ -162,6 +172,15 @@ bool DebugViewer::show_and_wait(
     cv::resizeWindow(
       kMaskWindow, static_cast<int>(mask.cols * scale), static_cast<int>(mask.rows * scale));
     sized_ = true;
+  }
+
+  if (realtime_) {
+    // 必须泵送 HighGUI 事件；不添加回放 deadline，不响应暂停/单步。
+    // waitKey(1) 的实际 GUI 调度耗时由后端决定，不是硬实时保证。
+    const int key = cv::waitKey(1);
+    const int character = key < 0 ? -1 : key & 0xff;
+    return !stop_requested() && windows_open() && character != 'q' &&
+           character != 'Q' && character != 27;
   }
 
   // 计入本帧检测/保存耗时；处理慢于目标帧率时逐帧显示，不跳帧追赶。

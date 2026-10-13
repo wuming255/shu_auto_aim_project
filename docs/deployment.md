@@ -40,7 +40,9 @@ CTest 至少应包含：
 - 应用配置、CSV、运行统计；
 - `srm_auto_aim_app` 离线 smoke test。
 
-MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误和采集失败摘要；测试不要求真实 SDK 或相机。当前默认有头文件构建为 15 项；关闭 MVS 或缺头文件时为 13 项。
+MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误、采集失败摘要和录像封口；测试不要求真实 SDK 或相机。另有 `srm_launcher_smoke_test` 验证启动脚本，`srm_video_recording_test` 和 `srm_recording_app_smoke_test` 验证真实编解码、原图录像、文件保护、写入失败、封口与无桌面诊断。当前默认有头文件构建为 18 项；关闭 MVS 或缺头文件时为 16 项。
+
+录像及其自动化测试要求 OpenCV 带 FFmpeg 视频后端、MJPG/FFV1 编解码器。应用不额外启动 ffmpeg 命令行进程；不开录像时不依赖这些编码器。录像本身不需要 HighGUI；预览需要 HighGUI 和可访问的桌面显示服务。录像目录需支持同目录硬链接，以便无覆盖发布，详细行为见 [原始 BGR 录像](application.md#原始-bgr-录像)。
 
 当前离线 smoke test 使用 `tests/data/application_smoke.ppm`，由 CTest 自动验证：
 
@@ -88,6 +90,8 @@ NUC 枚举、参数查询和 120 帧 dry-run 命令见 [application.md](applicat
 
 ## 离线回放
 
+已构建后可使用 `bash run.sh` 加载根目录 `run.conf`。脚本也支持 `video`、`image`、`mvs`、`camera`、`list` 和 `info` 快捷模式；详细参数说明见 [launcher.md](launcher.md)。
+
 单张图片：
 
 ```bash
@@ -129,6 +133,8 @@ debug 图像目录
 
 有桌面显示服务时，可在视频 dry-run 命令中添加 `--show-debug --start-paused`，查看检测叠加图和二值图。空格暂停/继续，`n` 单步，`q`/Esc 或关闭任一窗口退出；`--playback-fps 10` 可放慢播放。显示与 `--debug-every` 的保存频率独立，详细行为见 [application.md](application.md#可选窗口调试)。
 
+相机 dry-run 则使用 `bash run.sh mvs --show-debug` 实时刷新；不支持暂停、单步或播放节流。加 `--record replay_debug/camera-01.avi` 保存原始 BGR 视频，已有同名录像会报错。相机实测图像、桌面后端响应、编码吞吐和退出封口仍按 `questions.md` 现场核对。
+
 ## 运行输出检查
 
 重点检查：
@@ -154,6 +160,7 @@ debug 图像目录
 ### 软件文件
 
 - `build/srm_auto_aim_app`；
+- `run.sh`、`run.conf` 和 `docs/launcher.md`；
 - 与现场运行参数对应的 `key=value` 配置文件；
 - `docs/` 中的应用、协议、架构、工作流和本部署文档；
 - `questions.md`；

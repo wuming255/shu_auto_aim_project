@@ -2,6 +2,7 @@
 #include "app/debug_viewer.hpp"
 #include "app/runtime_csv_logger.hpp"
 #include "app/runtime_statistics.hpp"
+#include "app/video_recorder.hpp"
 #include "control/auto_aim_pipeline.hpp"
 #include "control/auto_aim_runtime.hpp"
 #include "control/safety_controller.hpp"
@@ -124,11 +125,20 @@ int main(int argc, const char * const argv[])
            "before relying on PnP output\n";
     }
 
+    if (options.show_debug) srm::app::DebugViewer::check_environment();
     prepare_debug_directory(options.debug_directory);
 
     srm::io::FrameSource frame_source(options.frame_source);          // 图像输入模块
     if (frame_source.type() == srm::io::FrameSourceType::mvs_camera) {
       std::cerr << frame_source.description();
+    }
+    // 在其他输出文件打开前拒绝已有录像（也包括指向同一文件的硬链接）。
+    std::optional<srm::app::VideoRecorder> recorder;
+    if (!options.record_path.empty()) {
+      recorder.emplace(options.record_path,
+        srm::app::VideoRecorder::choose_fps(options.record_fps, frame_source.nominal_fps()), options.record_codec);
+      std::cerr << "recording raw BGR: path=" << recorder->path() << " fps=" << recorder->fps()
+                << " codec=" << options.record_codec << '\n';
     }
     srm::io::SelfAimTransport transport(options.transport);           // 串口通信模块
     srm::vision::TraditionalDetector detector;                        // 传统视觉检测模块
@@ -137,6 +147,8 @@ int main(int argc, const char * const argv[])
     std::optional<srm::vision::DetectionResult> last_detection;       // 本帧检测结果，供保存和窗口显示使用。
     std::optional<srm::app::DebugViewer> debug_viewer;
     if (options.show_debug) {
+      const bool realtime = frame_source.type() == srm::io::FrameSourceType::mvs_camera ||
+                            frame_source.type() == srm::io::FrameSourceType::opencv_camera;
       const double nominal_fps = frame_source.nominal_fps();
       const double playback_fps = options.playback_fps > 0.0
                                    ? options.playback_fps
@@ -145,9 +157,10 @@ int main(int argc, const char * const argv[])
       debug_viewer.emplace(
         playback_fps,
         options.start_paused ||
-          options.frame_source.type == srm::io::FrameSourceType::image_file);
-      std::cerr << "debug windows: Space=pause/resume n=next q/Esc=quit playback_fps="
-                << playback_fps << '\n';
+          options.frame_source.type == srm::io::FrameSourceType::image_file, realtime);
+      if (realtime) std::cerr << "camera preview: q/Esc=quit (no pause or playback pacing)\n";
+      else std::cerr << "debug windows: Space=pause/resume n=next q/Esc=quit playback_fps="
+                     << playback_fps << '\n';
     }
 
     srm::control::AutoAimRuntime runtime(                             // 一帧图像的总调度模块，安排各个模块的协作和数据流转
@@ -185,6 +198,7 @@ int main(int argc, const char * const argv[])
         ++processed_frames;
         if (result.frame.has_value()) {
           const auto & frame = result.frame.value();
+          if (recorder) recorder->write(frame.bgr);
           const bool save_debug = last_detection.has_value() && !options.debug_directory.empty() &&
                                   frame.sequence % options.debug_every == 0;
           if (save_debug || debug_viewer.has_value()) {
@@ -210,6 +224,12 @@ int main(int argc, const char * const argv[])
     if (!options.dry_run) {         // 如果不是离线运行模式，就发送一条安全命令，关闭串口线程
       (void)transport.send_command_now(safe_command());
       transport.stop();
+    }
+
+    if (recorder) {
+      recorder->close();
+      std::cerr << "recorded_frames=" << recorder->frames_written()
+                << " record_path=" << recorder->path() << '\n';
     }
 
     write_summary(        //  写入运行摘要文件

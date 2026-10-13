@@ -6,6 +6,8 @@
 
 本入口支持 OpenCV 的图片、视频文件和 camera index 输入，以及可选的海康 MVS USB 相机输入。它们共用 `FrameSource` 和后续检测/运行报告接口；MVS 的真实相机采集仍需按 `questions.md` 验证。
 
+日常使用可直接执行 `bash run.sh`，长期参数编辑根目录 `run.conf`；模式、可选参数和窗口操作见 [一条命令启动说明](launcher.md)。
+
 ## 构建
 
 ```bash
@@ -62,9 +64,12 @@ build/srm_auto_aim_app \
 - `--summary PATH`：写入 key=value 运行摘要；
 - `--debug-dir PATH`：创建目录并保存传统检测 debug 图像；为空时不保存；
 - `--debug-every N`：每隔 N 个输入序号保存一张 debug 图，默认 `1`；
-- `--show-debug` / `--no-show-debug`：开启或关闭可选窗口，默认关闭，仅支持 dry-run 图片/视频；
+- `--show-debug` / `--no-show-debug`：开启或关闭可选窗口，默认关闭，仅支持 dry-run；文件输入可回放交互，相机输入实时刷新；
 - `--playback-fps FPS`：窗口播放帧率，`0` 自动选择，非零值范围为 `[0.1, 1000]`；
 - `--start-paused` / `--no-start-paused`：视频是否在第一帧暂停，默认不暂停；
+- `--record PATH` / `--no-record`：保存原始 BGR 视频或清除配置中的录像路径，默认关闭，仅用于 dry-run；
+- `--record-fps FPS`：录像播放元数据帧率，0 使用输入名义帧率或回退 30；不限制采集速度；
+- `--record-codec FOURCC`：录像编码，默认 MJPG，可选可用编码器如 FFV1；
 - `--max-frames N`：处理 N 帧后退出，0 表示不限制；
 - `--loop`：循环图片/视频文件；
 - `--dry-run`：不启动串口线程，可用于离线回放或相机采集检查。此模式安全控制器会因 transport 未运行而拒绝有效瞄准命令；
@@ -110,9 +115,19 @@ build/srm_auto_aim_app --input mvs --mvs-serial ACTUAL_SERIAL \
 
 取流通过 `MV_CC_GetImageBuffer` 借用缓冲；BGR8 复制，其余格式调用 SDK 转为自有 BGR `cv::Mat`，成功和异常路径均归还缓冲。时间戳是主机取到帧时的 `steady_clock`，不是设备曝光时间；MVS 的 `source_time_seconds=0`。SDK 采用一个缓存节点，但这不等同于保证最新帧或已测得实时延迟。
 
-超时、取流、元数据、转换或缓冲释放错误会进入现有读帧失败安全路径，打印具体 SDK 操作/错误码，写出 CSV 和 summary，随后以返回码 `1` 退出；实时失败不会记为文件 EOF。本轮没有相机自动重连。可保存 `--debug-dir` 图像用于检查检测与颜色，实时 MVS 输入不接受 `--show-debug` 或暂停选项。
+超时、取流、元数据、转换或缓冲释放错误会进入现有读帧失败安全路径，打印具体 SDK 操作/错误码，写出 CSV 和 summary，随后以返回码 `1` 退出；实时失败不会记为文件 EOF。当前没有相机自动重连。可保存 `--debug-dir` 图像用于检查检测与颜色；dry-run MVS 支持 `--show-debug` 实时预览，但拒绝暂停或非零回放速度参数。
 
 ## 可选窗口调试
+
+窗口均要求 `--dry-run`、可用的 OpenCV HighGUI 和桌面环境。缺少编译支持或 DISPLAY/WAYLAND_DISPLAY 时，在打开相机前给出清楚错误；窗口后端创建失败也会报告。相机预览示例：
+
+```bash
+bash run.sh mvs --show-debug --max-frames 0
+# 同时保存可供重新检测的原始 BGR 视频：
+bash run.sh mvs --show-debug --max-frames 0 --record replay_debug/camera-01.avi
+```
+
+MVS 和 OpenCV camera 每次成功处理帧后刷新同一套检测叠加图/亮度 mask 窗口。相机模式仅调用一次 `waitKey(1)` 处理 GUI 事件，无回放节流、不响应空格暂停或 n 单步；显式 `--start-paused` 或非零 `--playback-fps` 会报错。q/Esc、关闭任一窗口或停止信号正常结束，释放窗口/相机并封口录像。GUI 后端仍有调度开销，且当前 SDK 等帧调用未返回前无法处理按键；响应延迟还受取帧超时和处理耗时影响，不能作为硬实时控制入口。
 
 有桌面显示服务和 HighGUI 后端时，可逐帧查看视频的传统检测结果：
 
@@ -131,7 +146,7 @@ build/srm_auto_aim_app \
 
 `SRM detection` 显示当前 BGR 帧、灯条、装甲板四角点和 ROI；上方信息栏显示帧序号、源时间、灯条/装甲板数量及播放状态。`SRM brightness mask` 显示该帧 `DetectionResult::brightness_mask`，采用现有的 BGR 通道最大值阈值结果。无装甲板时仍更新两个窗口；检测异常时显示当前原图、空二值图和 `detection unavailable`，不复用上一帧结果。
 
-在任一窗口获得键盘焦点后：
+文件回放时，在任一窗口获得键盘焦点后：
 
 - 空格：暂停或继续；暂停期间不读取下一帧，也不追加 CSV 或重复保存图像；
 - `n`：前进一帧并保持暂停；播放中按 `n` 也会进入单步状态；
@@ -142,9 +157,31 @@ build/srm_auto_aim_app \
 
 图片输入会在首帧自动暂停，方便观察；按 `n` 继续到下一帧或 EOF。视频读到 EOF 或达到 `--max-frames` 后关闭窗口；需要反复观察时使用 `--loop`，或先用 `--start-paused` 再单步。窗口显示每个成功读取的帧，`--debug-every` 只控制文件保存，保存的图像仍由原来的 `draw_debug()` 生成，不包含窗口信息栏。
 
-窗口仅允许与 `--dry-run` 和文件输入一起使用，因此暂停不会挂起实时云台控制。不启用窗口时不调用 HighGUI，也不加入播放等待；无桌面环境可继续使用原有的 `--debug-dir`、CSV 和 summary。若配置文件启用了窗口，可用 `--no-show-debug --no-start-paused --playback-fps 0` 覆盖；构建不支持窗口或缺少显示环境时，显式请求窗口会报告错误。
+窗口仅允许与 `--dry-run` 一起使用，因此不会在实际控制流程中等待窗口。文件回放保留暂停/单步，实时相机只泵送 GUI 事件。不启用窗口时不调用 HighGUI，也不加入播放等待；无桌面环境可继续使用 `--debug-dir`、录像、CSV 和 summary。若配置文件启用了窗口，可用 `--no-show-debug --no-start-paused --playback-fps 0` 覆盖；构建不支持窗口或缺少显示环境时，显式请求窗口会报告错误。
 
 跟踪仍使用读取时的单调时间戳，播放速度和暂停会改变帧间时间；窗口回放用于观察检测结果，不能据此评估实际目标角速度、预测精度或现场控制性能。`step_duration_us` 只记录运行步骤，不包含窗口显示、保存或播放等待。
+
+## 原始 BGR 录像
+
+参考 `sp_vision_25-main/tools/recorder.cpp` 使用 MJPG AVI 保存调用方传入的图像，同时另写 `t w x y z`；`src/standard_mpc.cpp:98–106` 在检测前调用 `record(img, q, t)`，传入的是相机原图。本项目沿用“原始图像用于复查/重新检测”的用途，保存 `Frame.bgr`，不保存检测叠加、mask 或窗口信息栏，也不写虚构的四元数/姿态文件。这里的原始帧指输入层已转换为 BGR 的图像，不是传感器 Bayer 原始数据。
+
+```bash
+# 不开窗口也可以录制；路径须尚不存在。
+bash run.sh mvs --max-frames 300 --record replay_debug/raw-01.avi
+# 需要逐像素保留 BGR 时使用本机可用的无损 FFV1：
+bash run.sh mvs --record replay_debug/raw-lossless-01.avi --record-codec FFV1
+# 之后用现有检测器重新回放：
+bash run.sh video --source replay_debug/raw-01.avi --show-debug --max-frames 0
+```
+
+- 默认关闭，通过非空 `--record PATH` 或 `runtime.record` 启用；`--no-record`/空配置关闭。同步编码与校验仅用于 dry-run，`--live` 加录像会明确拒绝。
+- 输出必须是 `.avi`，由 OpenCV FFmpeg 视频后端编码。默认 `MJPG` 是有损压缩；`FFV1` 可无损保存。必须有相应编码器/解码器，不存在时返回错误，不静默改格式或换后端。录像不依赖 HighGUI。
+- 每个成功读取并进入应用处理分支的帧录一次，不受 `--debug-every` 影响；检测结果不可用时仍录本帧原图，文件暂停时不重复录像。尺寸必须为偶数且整段一致，拒绝静默裁掉奇数边或自动缩放。
+- `--record-fps` 接受 0 或 `[0.1,1000]`，0 使用有效的输入名义 FPS，否则 30。它只是恒定帧率视频的播放元数据，不是采集限速，也不重采样/插帧。实际采集速度与元数据不同会导致回放时长不同；如需主机帧时间和检测结果，另保留现有 CSV，按成功帧顺序对应。
+- 自动创建父目录，拒绝已有文件（含符号链接）；拒绝与 CSV/summary 路径相同。采集期间写同目录 `PATH.partial-XXXXXX.avi`，结束时 release 封口、fsync，并完整回读核对尺寸和帧数，随后通过无覆盖硬链接发布为 `PATH`、删除临时链接。录制期间另有同名文件出现时也不覆盖；文件系统不支持硬链接会明确失败并保留临时文件。
+- OpenCV `VideoWriter::write` 返回 void，部分底层 I/O 失败不抛异常；本实现捕获可见写入错误，并在封口时校验静默短写/少帧。**成功写入检查包含退出时的完整解码，长视频的退出可能需要额外时间**；不是每帧落盘确认或硬件持久性保证。
+- EOF、帧数上限、q/Esc、关闭窗口、SIGINT/SIGTERM 正常封口；MVS 取流失败也会封口已录到的有效帧，然后按采集失败返回 1。零帧不发布空视频。写入/封口/校验失败返回 1，不发布最终文件，诊断中给出保留的 partial 路径；异常终止或断电可能只留下不可播放的 partial 文件。
+- 正常封口后 stderr 输出 `recorded_frames`、`record_path`。录像失败可能在 summary 写出前退出，已有旧摘要不能视为本次成功结果。
 
 ## 配置文件
 
@@ -173,6 +210,9 @@ runtime.max_frames=0
 runtime.show_debug=false
 runtime.start_paused=false
 runtime.playback_fps=0
+runtime.record=
+runtime.record_fps=0
+runtime.record_codec=MJPG
 camera.intrinsics=800,800,320,240
 ```
 
@@ -198,6 +238,9 @@ camera.intrinsics=800,800,320,240
 - `runtime.show_debug`
 - `runtime.start_paused`
 - `runtime.playback_fps`
+- `runtime.record`
+- `runtime.record_fps`
+- `runtime.record_codec`
 - `camera.intrinsics`
 - `camera.mvs_serial`
 - `camera.mvs_index`
@@ -309,5 +352,5 @@ transport_communication_error_count=...
 - 程序默认关闭视觉开火，当前命令入口没有启用视觉开火意图；默认和异常路径的 `fire_flag` 都为 0。
 - `--dry-run` 不打开 CDC 设备；普通模式会启动传输线程并按照正式 18 字节 CDC 命令发送。
 - 图片/视频 EOF、MVS 读帧失败、停止信号和正常退出前会尝试发送安全命令，然后停止传输线程。
-- 日志、debug 图像或摘要写入失败会使程序报告错误；传输对象通过析构路径停止后台线程，不把异常留成运行中的收发线程。
+- 日志、debug 图像、录像或摘要写入失败会使程序报告错误；传输对象通过析构路径停止后台线程，不把异常留成运行中的收发线程。窗口与同步录像均限定为 dry-run。
 - 真实设备、云台和发射测试不由本入口自动获得许可，必须按照根目录 `questions.md` 执行。
