@@ -171,17 +171,23 @@ struct Sdk
     if (library) ::dlclose(library);
   }
 
-  std::vector<MV_CC_DEVICE_INFO> enumerate()
+  struct Enumeration
   {
-    // SDK 枚举指针在下一次枚举时失效，锁内拷贝设备描述。
-    std::lock_guard<std::mutex> lock(enumeration_mutex);
+    std::unique_lock<std::mutex> lock;
+    std::vector<const MV_CC_DEVICE_INFO *> devices;
+  };
+
+  Enumeration enumerate()
+  {
+    // 保留 SDK 原生描述，直到 CreateHandle 完成；下次枚举可能使指针失效。
+    // 4.7.0.3 会复制 636 字节，参考头文件的描述只有 572 字节，不能按值截断。
+    Enumeration result{std::unique_lock<std::mutex>(enumeration_mutex), {}};
     MV_CC_DEVICE_INFO_LIST list{};
     check(MV_CC_EnumDevices(MV_USB_DEVICE, &list), "MV_CC_EnumDevices(USB)");
     if (list.nDeviceNum > MV_MAX_DEVICE_NUM) throw std::runtime_error("MVS invalid device count");
-    std::vector<MV_CC_DEVICE_INFO> result;
     for (unsigned int index = 0; index < list.nDeviceNum; ++index) {
       if (list.pDeviceInfo[index] && list.pDeviceInfo[index]->nTLayerType == MV_USB_DEVICE) {
-        result.push_back(*list.pDeviceInfo[index]);
+        result.devices.push_back(list.pDeviceInfo[index]);
       }
     }
     return result;
@@ -423,10 +429,11 @@ bool mvs_compiled() noexcept { return true; }
 std::string list_mvs_cameras(const std::string & path)
 {
   const auto sdk = load_sdk(path);
-  const auto devices = sdk->enumerate();
+  const auto enumeration = sdk->enumerate();
+  const auto & devices = enumeration.devices;
   std::string report = "MVS sdk=" + sdk->version + " library=" + sdk->loaded_path +
                        " usb_device_count=" + std::to_string(devices.size()) + "\n";
-  for (std::size_t i = 0; i < devices.size(); ++i) report += device_description(devices[i], i) + "\n";
+  for (std::size_t i = 0; i < devices.size(); ++i) report += device_description(*devices[i], i) + "\n";
   return report;
 }
 
@@ -435,11 +442,12 @@ MvsCamera::MvsCamera(const MvsCameraConfig & config, int width, int height, doub
   validate_mvs_config(config);
   if (width < 0 || height < 0 || fps < 0 || !std::isfinite(fps)) throw std::invalid_argument("invalid MVS dimensions/fps");
   auto impl = std::make_unique<Impl>(config);
-  auto devices = impl->sdk->enumerate();
+  auto enumeration = impl->sdk->enumerate();
+  const auto & devices = enumeration.devices;
   int selected = config.device_index;
   if (!config.serial_number.empty()) {
     for (std::size_t i = 0; i < devices.size(); ++i) {
-      if (text(devices[i].SpecialInfo.stUsb3VInfo.chSerialNumber) == config.serial_number) {
+      if (text(devices[i]->SpecialInfo.stUsb3VInfo.chSerialNumber) == config.serial_number) {
         if (selected != -1) throw std::runtime_error("MVS serial number is ambiguous");
         selected = static_cast<int>(i);
       }
@@ -450,8 +458,9 @@ MvsCamera::MvsCamera(const MvsCameraConfig & config, int width, int height, doub
       "); use --list-cameras, then --mvs-serial or --mvs-index; check USB permissions if lsusb sees the camera");
   }
   impl->report = "MVS sdk=" + impl->sdk->version + " library=" + impl->sdk->loaded_path + "\n" +
-                 device_description(devices[selected], selected) + "\n";
-  check(impl->sdk->MV_CC_CreateHandle(&impl->handle, &devices[selected]), "MV_CC_CreateHandle");
+                 device_description(*devices[selected], selected) + "\n";
+  check(impl->sdk->MV_CC_CreateHandle(&impl->handle, devices[selected]), "MV_CC_CreateHandle");
+  enumeration.lock.unlock();
   check(impl->sdk->MV_CC_OpenDevice(impl->handle, MV_ACCESS_Exclusive, 0),
         "MV_CC_OpenDevice (check USB permissions or another process owning the camera)");
   impl->opened = true;
