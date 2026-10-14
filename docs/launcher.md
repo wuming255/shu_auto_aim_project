@@ -13,7 +13,7 @@
 bash run.sh
 ```
 
-默认回放 `demo.avi`，最多处理 120 帧，不开窗口，不启动 CDC，并保存检测图、CSV 和摘要。`demo.avi` 是本地素材，迁移到其他机器时需提供该视频或修改 `input.source`。
+默认回放 `demo.avi` 至 EOF，不开窗口，不启动 CDC，并保存检测图、CSV 和摘要。当前 `runtime.max_frames=0` 表示无帧数上限。`demo.avi` 是本地素材，迁移到其他机器时需提供该视频或修改 `input.source`。
 
 首次使用或代码更新后构建：
 
@@ -35,7 +35,7 @@ ctest --test-dir build --output-on-failure
 | `bash run.sh video --show-debug --start-paused` | 视频窗口调试，首帧暂停 |
 | `bash run.sh mvs` | 海康 USB 采集 |
 | `bash run.sh mvs --show-debug --max-frames 0` | 海康实时检测预览，q/Esc 或关闭窗口退出 |
-| `bash run.sh mvs --show-debug --record replay_debug/camera-01.avi` | 预览并保存原始 BGR 视频，默认上限 120 帧 |
+| `bash run.sh mvs --show-debug --record replay_debug/camera-01.avi` | 预览并保存原始 BGR 视频，持续至用户停止 |
 | `bash run.sh camera` | OpenCV camera index 输入 |
 | `bash run.sh list` | 枚举海康 USB 相机并退出 |
 | `bash run.sh info` | 打开所选海康设备、查询参数并退出，不改节点、不取流 |
@@ -44,7 +44,7 @@ ctest --test-dir build --output-on-failure
 
 `mvs`/`camera` 模式会清空文件源并关闭暂停和播放限速，窗口开关继续取配置或追加的 `--show-debug`/`--no-show-debug`。相机预览逐帧刷新，不暂停、不单步、不做回放节流。`video`/`image` 只覆盖输入类型，文件路径仍需匹配。不写模式时完全使用配置的输入设置。
 
-各模式继续使用配置中的 `runtime.dry_run` 和帧数上限；默认均为 dry-run、120 帧。需要持续运行时使用 `--max-frames 0`，按 Ctrl+C 结束。MVS 相机无需出现为 `/dev/video*`，应使用 `mvs` 而非 `camera` 模式。
+各模式继续使用配置中的 `runtime.dry_run` 和帧数上限；随附配置为 dry-run、帧数不限。短检查可显式加 `--max-frames 120`，持续运行按 Ctrl+C 结束。MVS 相机无需出现为 `/dev/video*`，应使用 `mvs` 而非 `camera` 模式。
 
 ## 3. 配置一次，以后直接启动
 
@@ -102,14 +102,21 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 | `--input image\|video\|camera\|mvs` | `input.type` | 输入类型，默认 video |
 | `--source PATH` | `input.source` | 文件路径，默认 demo.avi |
 | `--camera-index N` | `input.camera_index` | OpenCV 设备索引，默认 0 |
-| `--max-frames N` | `runtime.max_frames` | 默认 120；0 不限制 |
+| `--max-frames N` | `runtime.max_frames` | 默认 0，不限制 |
 | `--loop` / `--no-loop` | `input.loop` | 循环文件输入，默认 false |
 | `--show-debug` / `--no-show-debug` | `runtime.show_debug` | 两个检测窗口，默认 false；相机实时预览 |
 | `--start-paused` / `--no-start-paused` | `runtime.start_paused` | 视频首帧暂停，默认 false；图片窗口自动暂停 |
 | `--playback-fps FPS` | `runtime.playback_fps` | 窗口播放速度；0 自动，非零范围 0.1–1000 |
-| `--intrinsics fx,fy,cx,cy` | `camera.intrinsics` | 填真实内参，随附配置未设置 |
+| `--calibration PATH` | `camera.calibration` | 完整 K/畸变/尺寸/方向 YAML，默认空 |
+| `--extrinsics PATH` | `camera.extrinsics` | 处理后相机到云台 R/t YAML，默认空，要求完整内参 |
+| `--intrinsics fx,fy,cx,cy` | `camera.intrinsics` | 旧四参数方式，默认未设置，仅供 dry-run，与完整标定互斥 |
+| `--camera-rotation DEG` | `camera.rotation_deg` | 仅相机旋转，默认 0，顺时针 0/90/180/270 |
+| `--file-rotation DEG` | `input.rotation_deg` | 仅文件追加旋转，默认 0 |
+| `--file-orientation DEG` | `input.orientation_deg` | 已有像素方向，仅旧文件有明确记录时填写；新录像自动读 sidecar |
 
 窗口显示检测叠加图与亮度二值图，均可用 **q/Esc**或关闭任一窗口退出。文件回放还支持**空格**暂停/继续、**n**单步；相机预览忽略这两个键，拒绝显式暂停/非零播放速度选项。窗口仅支持 dry-run，依赖 HighGUI 和桌面环境。缺少支持时明确报错，不能把 GUI 加入 live 控制流程。窗口回放的暂停/变速会改变跟踪时间间隔，主要用于观察检测。
+
+`build/srm_calibrate_camera` 是独立的离线标定入口，不通过脚本模式启动。先实测板型、内角点行列和方格尺寸，再按 [标定说明](calibration.md) 处理图片目录或视频。相机与文件方向分开设置；方向在输入层生效，检测、预览和录像保持一致。新录像自动携带已存方向，回放通常无需再旋转。
 
 ### 海康相机
 
@@ -165,13 +172,13 @@ bash run.sh mvs --no-show-debug --record replay_debug/session-02.avi
 bash run.sh video --source replay_debug/session-01.avi --show-debug --no-record --max-frames 0
 ```
 
-也可以在 `run.conf` 设置 `runtime.record=replay_debug/session-01.avi`。路径固定且**不覆盖已有录像**，下一次录制请换新路径；`--no-record` 可临时关闭。与 CSV/摘要的覆盖规则不同，录像拒绝同名文件与输出路径冲突。
+也可以在 `run.conf` 设置 `runtime.record=replay_debug/session-01.avi`。路径固定且**不覆盖已有录像及其 `.metadata.yml`**，下一次录制请换新路径；`--no-record` 可临时关闭。与 CSV/摘要的覆盖规则不同，录像拒绝同名文件与输出路径冲突。复制或重命名视频时一并保留 sidecar，回放才能核对方向和存储尺寸；失败后留下的 sidecar 不代表已成功封口。
 
 参考 Recorder 保存检测前的原图和四元数文本。本项目保存输入层的 BGR 帧，用于重新检测，不包含框线、mask、窗口栏或虚构云台姿态；默认 MJPG 会有压缩损失，需要逐像素保留时加 `--record-codec FFV1`。现有 CSV 可另存处理结果与主机时间。
 
 同步录像也限定为 dry-run。每个成功读取的帧写一次，和 `debug-every` 无关；FPS 是播放元数据，不保证等于实测相机帧率。正常退出时封口并完整回读校验，再发布指定文件；长视频退出会多花一些时间。写入/编码/封口错误返回 1，保留诊断中的 `.partial-XXXXXX.avi` 而不发布最终视频；零帧不生成视频。完整内容、尺寸限制、文件系统要求和失败行为见 [原始 BGR 录像说明](application.md#原始-bgr-录像)。
 
-`--live` 仅控制是否启动 CDC，当前入口仍保持 `fire_flag=0`。真实 CDC/云台操作按 [questions.md](../questions.md) 执行。未配置内参时程序会提示，输入采集和检测观察可继续，默认矩阵不代表标定结果。
+`--live` 要求完整 `--calibration` 和 `--extrinsics` 才能启动 CDC，当前入口仍保持 `fire_flag=0`。真实 CDC/云台操作按 [questions.md](../questions.md) 执行。未配置标定时 dry-run 采集和检测观察可继续，默认矩阵不代表标定结果。卡顿定位请查看摘要中的 acquisition、detection、pipeline、录像、绘图/保存、GUI 显示/等待和完整 loop 耗时，口径见 [分层耗时说明](application.md#分层耗时与卡顿定位)。
 
 ## 5. 海康 SDK 和其他构建目录
 

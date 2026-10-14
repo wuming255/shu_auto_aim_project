@@ -1,6 +1,7 @@
 #include "app/application_options.hpp"
 #include "app/runtime_csv_logger.hpp"
 #include "app/runtime_statistics.hpp"
+#include "app/playback_timing.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -469,6 +470,11 @@ void test_runtime_statistics()
 
 int main()
 {
+  const auto now = std::chrono::steady_clock::now();
+  assert(srm::app::playback_wait_ms(false, now - std::chrono::milliseconds(20), now) == 1);
+  assert(srm::app::playback_wait_ms(false, now + std::chrono::milliseconds(3), now) == 3);
+  assert(srm::app::playback_wait_ms(false, now + std::chrono::milliseconds(50), now) == 10);
+  assert(srm::app::playback_wait_ms(true, now - std::chrono::milliseconds(20), now) == 10);
   test_command_line_options();
   test_debug_window_validation();
   test_command_line_validation();

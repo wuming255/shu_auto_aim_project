@@ -174,7 +174,17 @@ bool apply_camera_entry(ApplicationOptions & options, const std::string & key,
                         const std::string & value, const char * context)
 {
   auto & source = options.frame_source;
-  if (key == "input.width") set_camera_integer(source.width, value, context);
+  if (key == "camera.rotation_deg" || key == "input.rotation_deg" || key == "input.orientation_deg") {
+    const auto parsed = parse_integer(value, context);
+    if (parsed < 0 || parsed > 270) throw std::invalid_argument("invalid rotation/orientation");
+    io::validate_rotation(static_cast<int>(parsed));
+    if (key == "camera.rotation_deg") source.camera_rotation_deg = static_cast<int>(parsed);
+    else if (key == "input.rotation_deg") source.file_rotation_deg = static_cast<int>(parsed);
+    else source.file_orientation_deg = static_cast<int>(parsed);
+  }
+  else if (key == "camera.calibration") options.calibration_path = value;
+  else if (key == "camera.extrinsics") options.extrinsics_path = value;
+  else if (key == "input.width") set_camera_integer(source.width, value, context);
   else if (key == "input.height") set_camera_integer(source.height, value, context);
   else if (key == "input.fps") source.fps = parse_double(value, context);
   else if (key == "camera.mvs_serial") source.mvs.serial_number = value;
@@ -257,6 +267,12 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
     throw std::invalid_argument("camera dimensions/fps must be finite and non-negative");
   }
   if (options.list_cameras || options.camera_info) return;
+  if (!options.calibration_path.empty() && options.intrinsics_set) {
+    throw std::invalid_argument("choose full --calibration or legacy --intrinsics; do not combine them");
+  }
+  if (!options.extrinsics_path.empty() && options.calibration_path.empty()) {
+    throw std::invalid_argument("--extrinsics requires full --calibration with resolution/orientation");
+  }
 
   const auto type = options.frame_source.type;
   if ((type == io::FrameSourceType::image_file || type == io::FrameSourceType::video_file) &&
@@ -295,6 +311,21 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
     for (const auto & output : {options.log_path, options.summary_path}) {
       if (!output.empty() && recording == std::filesystem::weakly_canonical(std::filesystem::absolute(output))) {
         throw std::invalid_argument("recording path conflicts with log/summary path");
+      }
+    }
+  }
+  // Loading calibration and recording metadata must never let a log truncate the input data.
+  for (const auto & protected_path : {options.frame_source.uri, options.calibration_path, options.extrinsics_path,
+         options.frame_source.uri.empty() ? std::string{} : options.frame_source.uri + ".metadata.yml",
+         options.record_path.empty() ? std::string{} : options.record_path + ".metadata.yml"}) {
+    if (protected_path.empty()) continue;
+    for (const auto & output : {options.log_path, options.summary_path}) {
+      if (output.empty()) continue;
+      std::error_code error;
+      const bool same_file = std::filesystem::equivalent(protected_path, output, error);
+      if (same_file || std::filesystem::weakly_canonical(std::filesystem::absolute(protected_path)) ==
+                       std::filesystem::weakly_canonical(std::filesystem::absolute(output))) {
+        throw std::invalid_argument("log/summary path conflicts with input/calibration/metadata");
       }
     }
   }
@@ -386,6 +417,9 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       {"--camera-width", "input.width"}, {"--camera-height", "input.height"},
       {"--camera-fps", "input.fps"}, {"--mvs-serial", "camera.mvs_serial"},
       {"--mvs-index", "camera.mvs_index"}, {"--mvs-library", "camera.mvs_library"},
+      {"--camera-rotation", "camera.rotation_deg"}, {"--file-rotation", "input.rotation_deg"},
+      {"--file-orientation", "input.orientation_deg"}, {"--calibration", "camera.calibration"},
+      {"--extrinsics", "camera.extrinsics"},
       {"--exposure-us", "camera.exposure_us"}, {"--gain", "camera.gain"},
       {"--pixel-format", "camera.pixel_format"}, {"--camera-timeout-ms", "camera.timeout_ms"}};
     bool camera_option = false;
@@ -540,6 +574,11 @@ std::string usage(const char * program_name)
     << "  --camera-timeout-ms N       MVS read timeout in [1,10000] (default: 1000)\n"
     << "  --device PATH               USB CDC device (default: /dev/ttyACM0)\n"
     << "  --intrinsics fx,fy,cx,cy    camera intrinsic parameters\n"
+    << "  --calibration PATH          full OpenCV YAML: K, distortion, resolution, orientation\n"
+    << "  --extrinsics PATH           explicit camera-to-gimbal R/t and coordinate convention\n"
+    << "  --camera-rotation DEG       rotate live camera only: 0/90/180/270 clockwise\n"
+    << "  --file-rotation DEG         additional rotation for image/video only (default: 0)\n"
+    << "  --file-orientation DEG      stored orientation for legacy files without metadata\n"
     << "  --log PATH                  write CSV runtime log\n"
     << "  --summary PATH              write key=value replay summary\n"
     << "  --debug-dir PATH            save detector debug images\n"

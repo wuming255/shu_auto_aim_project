@@ -23,6 +23,7 @@ MVS 支持默认尝试启用，只在 Linux 构建找到 SDK 开发头文件时�
 
 ```text
 build/srm_auto_aim_app
+build/srm_calibrate_camera
 ```
 
 ## 输入模式与离线回放
@@ -59,7 +60,12 @@ build/srm_auto_aim_app \
 - `--source PATH`：图片或视频路径；
 - `--camera-index N`：OpenCV camera index；
 - `--device PATH`：USB CDC 设备，默认 `/dev/ttyACM0`；
-- `--intrinsics fx,fy,cx,cy`：相机内参；
+- `--calibration PATH`：完整 OpenCV YAML，含 K、畸变、分辨率和方向；
+- `--extrinsics PATH`：处理后相机到云台 R/t，要求同时提供完整标定；
+- `--intrinsics fx,fy,cx,cy`：旧四参数方式，仅供 dry-run，与完整标定互斥；
+- `--camera-rotation DEG`：仅实时相机顺时针旋转 0/90/180/270 度，默认 0；
+- `--file-rotation DEG`：仅图片/视频追加旋转，默认 0；
+- `--file-orientation DEG`：仅声明旧文件已有像素方向，不再旋转；新录像自动读取 sidecar；
 - `--log PATH`：写入 CSV 运行日志；
 - `--summary PATH`：写入 key=value 运行摘要；
 - `--debug-dir PATH`：创建目录并保存传统检测 debug 图像；为空时不保存；
@@ -78,7 +84,15 @@ build/srm_auto_aim_app \
 
 `--debug-dir` 会在启动时创建目录（包括必要的父目录）；图像文件命名为 `frame_000000.png`、`frame_000001.png` 等，编号使用 `Frame.sequence`。图像由 `TraditionalDetector::draw_debug()` 生成，不打开 GUI 窗口；当检测回调成功且序号满足 `debug-every` 时才写出。
 
-未提供 `--intrinsics` 时，程序仍可启动用于输入和检测 smoke test，但会明确警告；不得把默认矩阵当作现场标定结果。
+未提供标定时，dry-run 仍可用于输入和检测 smoke test，但会明确警告；上面的四参数示例不是现场标定。`--live` 必须提供完整 `--calibration` 和 `--extrinsics`，缺失时在启动 CDC 前拒绝。
+
+## 完整标定与输入方向
+
+离线棋盘格工具的采集要求、实测板规格、图片/视频命令、逐视图误差和外参格式见 [标定说明](calibration.md)。`--calibration` 中的 K 与非零畸变直接交给现有 PnP，外参不再只依赖默认轴映射。
+
+输入层在 BGR 转换后应用方向；检测、PnP、预览和原始 BGR 录像看到同一份处理后像素。相机方向与文件方向互不影响：相机需旋转时用 `--camera-rotation`，不会使后续视频回放自动重复旋转。新录像的 `<录像名>.metadata.yml` 记录实际存储尺寸和相对原生像素的方向，须随视频一起保留。旧文件无元数据时假设已有方向为 0；若已知像素本身已转过，使用 `--file-orientation` 声明。
+
+每帧交付尺寸/方向必须与内参一致，外参也必须声明同一几何。不匹配直接报错，不自动缩放 K 或把旧方向的 R/t 当作新外参。几何元数据不能识别换镜头、同尺寸 ROI 或机械安装变化，这些仍需实际记录与重新验证。
 
 ## 海康 MVS USB 输入
 
@@ -153,7 +167,7 @@ build/srm_auto_aim_app \
 - `q`、Esc 或关闭任一窗口：正常退出并写出已处理帧的 summary；
 - Ctrl+C / SIGTERM：播放和暂停期间都响应停止请求。
 
-默认按 `FrameSource::nominal_fps()` 播放；源帧率不可用时回退为 30 FPS，可用 `--playback-fps 10` 放慢。播放等待计入检测和保存已花费的时间，处理慢时仍逐帧显示，不丢帧追赶；GUI 事件处理使实际帧率可能低于指定值。自动帧率的等待范围限制为 0.1–1000 FPS。
+默认按 `FrameSource::nominal_fps()` 播放；源帧率不可用时回退为 30 FPS，可用 `--playback-fps 10` 放慢。播放等待计入检测和保存已花费的时间，处理慢时仍逐帧显示，不丢帧追赶；GUI 事件处理使实际帧率可能低于指定值。自动帧率的等待范围限制为 0.1–1000 FPS。播放时将剩余等待限制在 1–10 ms，已超时时仅请求 1 ms 事件处理，修复原先此分支仍固定请求 10 ms 的额外等待；暂停时请求 10 ms。实际耗时受桌面后端调度影响。
 
 图片输入会在首帧自动暂停，方便观察；按 `n` 继续到下一帧或 EOF。视频读到 EOF 或达到 `--max-frames` 后关闭窗口；需要反复观察时使用 `--loop`，或先用 `--start-paused` 再单步。窗口显示每个成功读取的帧，`--debug-every` 只控制文件保存，保存的图像仍由原来的 `draw_debug()` 生成，不包含窗口信息栏。
 
@@ -163,7 +177,7 @@ build/srm_auto_aim_app \
 
 ## 原始 BGR 录像
 
-参考 `sp_vision_25-main/tools/recorder.cpp` 使用 MJPG AVI 保存调用方传入的图像，同时另写 `t w x y z`；`src/standard_mpc.cpp:98–106` 在检测前调用 `record(img, q, t)`，传入的是相机原图。本项目沿用“原始图像用于复查/重新检测”的用途，保存 `Frame.bgr`，不保存检测叠加、mask 或窗口信息栏，也不写虚构的四元数/姿态文件。这里的原始帧指输入层已转换为 BGR 的图像，不是传感器 Bayer 原始数据。
+参考 `sp_vision_25-main/tools/recorder.cpp` 使用 MJPG AVI 保存调用方传入的图像，同时另写 `t w x y z`；`src/standard_mpc.cpp:98–106` 在检测前调用 `record(img, q, t)`，传入的是相机原图。本项目沿用“原始图像用于复查/重新检测”的用途，保存 `Frame.bgr`，不保存检测叠加、mask 或窗口信息栏，也不写虚构的四元数/姿态文件。这里的原始帧指输入层已转换为 BGR 并完成配置旋转的图像，不是传感器 Bayer 原始数据。
 
 ```bash
 # 不开窗口也可以录制；路径须尚不存在。
@@ -179,6 +193,7 @@ bash run.sh video --source replay_debug/raw-01.avi --show-debug --max-frames 0
 - 每个成功读取并进入应用处理分支的帧录一次，不受 `--debug-every` 影响；检测结果不可用时仍录本帧原图，文件暂停时不重复录像。尺寸必须为偶数且整段一致，拒绝静默裁掉奇数边或自动缩放。
 - `--record-fps` 接受 0 或 `[0.1,1000]`，0 使用有效的输入名义 FPS，否则 30。它只是恒定帧率视频的播放元数据，不是采集限速，也不重采样/插帧。实际采集速度与元数据不同会导致回放时长不同；如需主机帧时间和检测结果，另保留现有 CSV，按成功帧顺序对应。
 - 自动创建父目录，拒绝已有文件（含符号链接）；拒绝与 CSV/summary 路径相同。采集期间写同目录 `PATH.partial-XXXXXX.avi`，结束时 release 封口、fsync，并完整回读核对尺寸和帧数，随后通过无覆盖硬链接发布为 `PATH`、删除临时链接。录制期间另有同名文件出现时也不覆盖；文件系统不支持硬链接会明确失败并保留临时文件。
+- 启动时还拒绝已有 `PATH.metadata.yml`；首个交付帧在写视频前独占创建 sidecar，记录旋转后的宽高/方向。回放自动读取它并验证尺寸，不受相机方向配置影响。失败可能留下 sidecar 和 partial 作为诊断；sidecar 存在不表示录像成功，下次使用新路径，保留原视频及元数据对应关系。
 - OpenCV `VideoWriter::write` 返回 void，部分底层 I/O 失败不抛异常；本实现捕获可见写入错误，并在封口时校验静默短写/少帧。**成功写入检查包含退出时的完整解码，长视频的退出可能需要额外时间**；不是每帧落盘确认或硬件持久性保证。
 - EOF、帧数上限、q/Esc、关闭窗口、SIGINT/SIGTERM 正常封口；MVS 取流失败也会封口已录到的有效帧，然后按采集失败返回 1。零帧不发布空视频。写入/封口/校验失败返回 1，不发布最终文件，诊断中给出保留的 partial 路径；异常终止或断电可能只留下不可播放的 partial 文件。
 - 正常封口后 stderr 输出 `recorded_frames`、`record_path`。录像失败可能在 summary 写出前退出，已有旧摘要不能视为本次成功结果。
@@ -195,6 +210,7 @@ input.type=video
 input.source=sample.mp4
 input.camera_index=0
 input.loop=false
+input.rotation_deg=0
 
 transport.device=/dev/ttyACM0
 transport.transmit_period_ms=10
@@ -214,6 +230,7 @@ runtime.record=
 runtime.record_fps=0
 runtime.record_codec=MJPG
 camera.intrinsics=800,800,320,240
+camera.rotation_deg=0
 ```
 
 当前支持的键：
@@ -225,6 +242,8 @@ camera.intrinsics=800,800,320,240
 - `input.height`
 - `input.fps`
 - `input.loop`
+- `input.rotation_deg`
+- `input.orientation_deg`
 - `transport.device`
 - `transport.transmit_period_ms`
 - `transport.io_timeout_ms`
@@ -242,6 +261,9 @@ camera.intrinsics=800,800,320,240
 - `runtime.record_fps`
 - `runtime.record_codec`
 - `camera.intrinsics`
+- `camera.calibration`
+- `camera.extrinsics`
+- `camera.rotation_deg`
 - `camera.mvs_serial`
 - `camera.mvs_index`
 - `camera.mvs_library`
@@ -280,6 +302,10 @@ build/srm_auto_aim_app \
 ```
 
 配置文件只负责运行参数，不包含协议字段、视觉开火许可或下位机固件配置；当前入口仍不会生成非零 `fire_flag`。
+
+`camera.calibration` 和 `camera.extrinsics` 是 YAML 路径，空值表示未配置。`input.orientation_deg` 空值会报错，未确认旧文件方向时应省略该键；显式值必须为 0/90/180/270。用完整标定替换旧配置时，删除或注释 `camera.intrinsics`，不能仅追加 `--calibration` 而保留旧四参数。
+
+log/summary 在打开前检查与输入文件、标定、外参及源/录像 sidecar 的规范化路径或已有文件别名冲突，以免截断输入。正常日志/摘要输出仍可能覆盖上次结果，建议使用独立批次目录。
 
 ## CSV 运行日志
 
@@ -328,6 +354,11 @@ CSV 记录用于离线诊断，不应直接作为下位机协议输入。
 processed_frames=...
 log_rows=...
 dry_run=...
+calibration_loaded=...
+extrinsics_loaded=...
+image_width=...
+image_height=...
+orientation_deg=...
 step_count=...
 frame_count=...
 end_of_stream_count=...
@@ -347,10 +378,34 @@ transport_communication_error_count=...
 
 摘要用于比较离线回放、检查安全状态分布、检查处理耗时和观察 transport 线程；它不包含协议原始帧，也不能替代真实设备测试。`nonzero_fire_request_count` 在当前应用中应保持为 `0`。
 
+`image_width`、`image_height`、`orientation_deg` 仅在有交付帧时出现，取首帧几何。加载状态为 1 只表示文件已成功解析/校验，不表示现场标定已验收。
+
+## 分层耗时与卡顿定位
+
+summary 对下列每个阶段输出 `<stage>_sample_count`、`total_<stage>_duration_us`、`average_<stage>_duration_us`、`max_<stage>_duration_us`。时钟为 `steady_clock`，单位微秒，平均值按该阶段自己的样本数计算，未执行的阶段样本数为 0。
+
+| stage | 计时边界 |
+|---|---|
+| `acquisition` | `FrameSource::read`，包括解码/SDK 等帧、复制、方向处理和几何检查 |
+| `detection` | 检测回调 |
+| `pipeline` | 检测后的 PnP/选择/跟踪/弹道管线，不包含独立安全控制和 transport 写入 |
+| `logging` | 每步 CSV logger 调用，含关闭日志时的空调用，不代表物理落盘确认 |
+| `recording` | 每帧同步 `VideoRecorder::write`，不含首帧 sidecar 创建 |
+| `debug_draw` | 应用调用 `draw_debug()`，不含窗口内部状态栏绘制 |
+| `debug_save` | 同步调试 PNG 编码/保存 |
+| `gui_display` | 窗口状态栏/mask 准备及 `imshow` 提交 |
+| `gui_wait` | GUI 事件处理、文件节流或用户暂停等待 |
+| `loop` | 一次应用循环，包含读帧至日志、录像、绘图、GUI 及首帧元数据等开销 |
+| `recording_close` | 退出时封口、fsync、完整回读及发布，与循环单独记录 |
+
+`acquisition` 对每步计数，可能包含最后一次 EOF；`detection`/`pipeline` 对读到帧的步骤计数，处理异常时未执行的阶段可能记 0。外层 `loop`、`step_duration` 和内部阶段相互包含，不能把这些平均值全部相加；`step_duration` 仍只包含 runtime 读帧至安全命令写入。计时小于 1 微秒会取整为 0。
+
+先用同一离线输入和帧数、关闭窗口及保存输出取得基线，再分别启用录像、debug 存图，最后在桌面启用 GUI。读帧慢应结合源解码/SDK 等待检查；保存慢看对应编码阶段；`gui_wait` 很大先排除主动暂停和播放节流。录像退出变慢应看 `recording_close`，不要据 `step_duration` 推断总体吞吐。本轮离线计时没有验证真实桌面或相机性能，测量方法与现场待办见 [questions.md](../questions.md)。
+
 ## 安全约束
 
 - 程序默认关闭视觉开火，当前命令入口没有启用视觉开火意图；默认和异常路径的 `fire_flag` 都为 0。
-- `--dry-run` 不打开 CDC 设备；普通模式会启动传输线程并按照正式 18 字节 CDC 命令发送。
+- `--dry-run` 不打开 CDC 设备；`--live` 在完整内外参校验后启动传输线程，按照正式 18 字节 CDC 命令发送，仍保持 `fire_flag=0`。
 - 图片/视频 EOF、MVS 读帧失败、停止信号和正常退出前会尝试发送安全命令，然后停止传输线程。
 - 日志、debug 图像、录像或摘要写入失败会使程序报告错误；传输对象通过析构路径停止后台线程，不把异常留成运行中的收发线程。窗口与同步录像均限定为 dry-run。
 - 真实设备、云台和发射测试不由本入口自动获得许可，必须按照根目录 `questions.md` 执行。

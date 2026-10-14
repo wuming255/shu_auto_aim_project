@@ -10,7 +10,8 @@
 - 支持正式自瞄 CDC 协议对应的 transport；
 - 支持 `--dry-run` 离线运行及不启动 CDC 的相机采集检查；
 - 默认不启用视觉开火，所有默认和异常路径保持 `fire_flag=0`；
-- MVS 软件适配已接入，真实相机采集和完整 SDK ABI 仍需最终确认；现场标定参数通过配置提供。
+- MVS 软件适配已接入；2026-10-14 NUC 短采集证据见 `dev_log/2026-10-14-nuc-mvs.md`，持续采集和完整 SDK ABI 仍需最终确认；
+- 提供无窗口棋盘格图片/视频标定工具，主程序加载完整内参/畸变和相机到云台 R/t，按处理后尺寸/方向校验；现场数值仍待实测。
 
 ## 构建与自动化验收
 
@@ -38,9 +39,11 @@ CTest 至少应包含：
 - 图片/视频输入；
 - 检测、PnP、选择、跟踪、补偿和安全控制；
 - 应用配置、CSV、运行统计；
+- 合成棋盘格角点/内参恢复、标定和外参文件拒绝行为、方向一致性；
+- 标定工具图片目录/视频输出及主程序完整标定加载；
 - `srm_auto_aim_app` 离线 smoke test。
 
-MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误、采集失败摘要和录像封口；测试不要求真实 SDK 或相机。另有 `srm_launcher_smoke_test` 验证启动脚本，`srm_video_recording_test` 和 `srm_recording_app_smoke_test` 验证真实编解码、原图录像、文件保护、写入失败、封口与无桌面诊断。当前默认有头文件构建为 18 项；关闭 MVS 或缺头文件时为 16 项。
+MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误、采集失败摘要和录像封口；测试不要求真实 SDK 或相机。另有 `srm_launcher_smoke_test` 验证启动脚本，`srm_video_recording_test` 和 `srm_recording_app_smoke_test` 验证真实编解码、原图录像、文件保护、写入失败、封口与无桌面诊断。当前有头文件/MVS 构建注册 21 项，关闭 MVS 或缺头文件时减少两项，为 19 项；用 `ctest --test-dir build -N` 查看实际列表。每轮实际执行范围与结果以对应开发日志为准。
 
 录像及其自动化测试要求 OpenCV 带 FFmpeg 视频后端、MJPG/FFV1 编解码器。应用不额外启动 ffmpeg 命令行进程；不开录像时不依赖这些编码器。录像本身不需要 HighGUI；预览需要 HighGUI 和可访问的桌面显示服务。录像目录需支持同目录硬链接，以便无覆盖发布，详细行为见 [原始 BGR 录像](application.md#原始-bgr-录像)。
 
@@ -87,6 +90,14 @@ build/srm_mvs_sdk_conversion_test \
 该程序加载真实 SDK，用合成设备描述建立未打开设备的本地句柄，检查 RGB8、Mono8 和四种 Bayer8 转 BGR 的长度与已知颜色；不枚举、不打开设备、不取流。它不纳入无运行库的默认 CTest，须设置同样的运行环境并显式传入库路径。通过不能代表真实帧布局、相机颜色或采集已经验证。
 
 NUC 枚举、参数查询和 120 帧 dry-run 命令见 [application.md](application.md#海康-mvs-usb-输入)，验证记录项目见根目录 [questions.md](../questions.md)。不指定曝光、增益、尺寸、FPS 或像素格式时保留设备当前值；先保存 `--camera-info` 的实际报告，再按节点范围和标定配置调整。
+
+已有 NUC 验证使用参考设备描述的 SDK 原生指针完成 CreateHandle，绕开旧结构截断问题，已成功读取/转换 10 帧 BayerRG8。该历史记录覆盖当前 USB 路径的短采集，不代表所有 SDK 接口 ABI、持续 FPS、颜色、桌面性能或本轮新增标定已在 NUC 验收。本轮标定与计时仅在开发机离线/模拟验证。
+
+## 标定交付
+
+按 [标定说明](calibration.md) 使用实测板规格生成候选 `camera.yml`，保留原始图像/视频、对应 sidecar、采集配置、`views.csv`、角点和去畸变检查图，以及独立验证结果。原始大录像不入版本库，根目录 `calibration/` 下的 AVI 已忽略，YAML 与说明仍可跟踪。
+
+外参须来自已确认坐标系、单位和采集模型的实际测量/配对数据。加载时验证矩阵合法性与相同几何；合法文件不能替代实测精度验收。`--live` 在完整内外参缺失时拒绝启动 CDC，旧四参数 `--intrinsics` 仅用于 dry-run。
 
 ## 离线回放
 
@@ -145,6 +156,8 @@ debug 图像目录
 - `nonzero_fire_request_count` 是否为 `0`；
 - CSV 中 `fire_flag` 是否全为 `0`；
 - transport 计数和通信错误是否与运行模式一致；
+- `calibration_loaded`、`extrinsics_loaded`、交付宽高和方向是否与本次配置一致；
+- 各阶段 sample_count、平均/最大耗时是否说明了解码、检测、存图、录像或 GUI 等待的开销，退出校验另看 `recording_close`；
 - debug 图像是否能够定位灯条颜色、几何筛选和装甲板配对问题。
 
 ## 现场接入前的配置原则
@@ -159,9 +172,9 @@ debug 图像目录
 
 ### 软件文件
 
-- `build/srm_auto_aim_app`；
+- `build/srm_auto_aim_app` 和 `build/srm_calibrate_camera`；
 - `run.sh`、`run.conf` 和 `docs/launcher.md`；
-- 与现场运行参数对应的 `key=value` 配置文件；
+- 与现场运行参数对应的 `key=value` 配置、完整内外参 YAML 及采集/独立验证记录；
 - `docs/` 中的应用、协议、架构、工作流和本部署文档；
 - `questions.md`；
 - 离线回放样本和对应 CSV/summary/debug 输出（如有）。
@@ -171,7 +184,7 @@ debug 图像目录
 - CMake 配置成功；
 - 编译成功；
 - CTest 全部通过；
-- `srm_auto_aim_app --help` 正常；
+- `srm_auto_aim_app --help` 和 `srm_calibrate_camera --help` 正常；
 - 至少一次 dry-run 离线 smoke test 成功；
 - 默认和异常路径确认 `fire_flag=0`。
 

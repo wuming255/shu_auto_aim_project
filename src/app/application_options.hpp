@@ -42,6 +42,8 @@ struct ApplicationOptions
   double fy = 1.0;
   double cx = 0.0;
   double cy = 0.0;
+  std::string calibration_path;
+  std::string extrinsics_path;
 };
 
 // 解析命令行参数；参数错误或配置文件错误抛出 std::invalid_argument。

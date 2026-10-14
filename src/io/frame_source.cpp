@@ -1,6 +1,7 @@
 #include "io/frame_source.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -17,6 +18,9 @@ constexpr auto kTimestampStep = std::chrono::microseconds(1);
 
 void validate_config(const FrameSourceConfig & config)    // 检查配置是否合法
 {
+  validate_rotation(config.camera_rotation_deg);
+  validate_rotation(config.file_rotation_deg);
+  if (config.file_orientation_deg) validate_rotation(*config.file_orientation_deg);
   if (config.width < 0 || config.height < 0) {
     throw std::invalid_argument("frame source width and height must not be negative");
   }
@@ -60,6 +64,13 @@ const char * to_string(FrameSourceType type) noexcept       // 将输入源类�
 FrameSource::FrameSource(FrameSourceConfig config) : config_(std::move(config))
 {
   validate_config(config_);
+  const bool file_input = config_.type == FrameSourceType::image_file || config_.type == FrameSourceType::video_file;
+  if (file_input && std::filesystem::exists(config_.uri + ".metadata.yml")) {
+    stored_geometry_ = read_image_geometry(config_.uri + ".metadata.yml");
+    if (config_.file_orientation_deg && *config_.file_orientation_deg != stored_geometry_->orientation_deg) {
+      throw std::invalid_argument("file orientation conflicts with recording metadata");
+    }
+  }
 
   switch (config_.type) {
     case FrameSourceType::image_file:
@@ -146,6 +157,22 @@ bool FrameSource::read(Frame & frame)
   }
 
   if (!success) return false;
+  const bool file_input = config_.type == FrameSourceType::image_file || config_.type == FrameSourceType::video_file;
+  if (stored_geometry_ && next.bgr.size() != stored_geometry_->size) {
+    throw std::invalid_argument("file resolution conflicts with recording metadata");
+  }
+  const int rotation = file_input ? config_.file_rotation_deg : config_.camera_rotation_deg;
+  const int stored_orientation = stored_geometry_ ? stored_geometry_->orientation_deg : config_.file_orientation_deg.value_or(0);
+  next.orientation_deg = ((file_input ? stored_orientation : 0) + rotation) % 360;
+  next.bgr = rotate_image(next.bgr, rotation);
+  if (config_.expected_geometry) {
+    if (next.bgr.size() != config_.expected_geometry->size) {
+      throw std::invalid_argument("calibration resolution does not match delivered frame resolution");
+    }
+    if (next.orientation_deg != config_.expected_geometry->orientation_deg) {
+      throw std::invalid_argument("calibration orientation does not match delivered frame orientation");
+    }
+  }
   frame = std::move(next);      // 放入下一帧图像
   return true;
 }

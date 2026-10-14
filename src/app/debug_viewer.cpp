@@ -1,4 +1,5 @@
 #include "app/debug_viewer.hpp"
+#include "app/playback_timing.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -161,7 +162,10 @@ bool DebugViewer::show_and_wait(
   const vision::DetectionResult * detection, const std::function<bool()> & stop_requested)
 {
 #ifdef SRM_HAVE_HIGHGUI
+  display_duration_ = std::chrono::microseconds{0};
+  wait_duration_ = std::chrono::microseconds{0};
   if (stop_requested() || (sized_ && !windows_open())) return false;
+  const auto display_start = std::chrono::steady_clock::now();
   show_drawing(drawing, frame, detection);
   const cv::Mat mask = detection != nullptr && !detection->brightness_mask.empty()
                          ? detection->brightness_mask
@@ -173,6 +177,14 @@ bool DebugViewer::show_and_wait(
       kMaskWindow, static_cast<int>(mask.cols * scale), static_cast<int>(mask.rows * scale));
     sized_ = true;
   }
+  display_duration_ = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - display_start);
+  wait_duration_ = std::chrono::microseconds{0};
+  // Include backend event processing, intentional playback pacing and pause in a separate metric.
+  struct WaitTimer {
+    std::chrono::microseconds & duration;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~WaitTimer() { duration = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start); }
+  } wait_timer{wait_duration_};
 
   if (realtime_) {
     // 必须泵送 HighGUI 事件；不添加回放 deadline，不响应暂停/单步。
@@ -186,7 +198,7 @@ bool DebugViewer::show_and_wait(
   // 计入本帧检测/保存耗时；处理慢于目标帧率时逐帧显示，不跳帧追赶。
   auto deadline = frame.timestamp + frame_period_;
   while (!stop_requested()) {
-    const int key = cv::waitKey(10);
+    const int key = cv::waitKey(playback_wait_ms(paused_, deadline, std::chrono::steady_clock::now()));
     if (!windows_open()) return false;
     if (key >= 0) {
       const int character = key & 0xff;

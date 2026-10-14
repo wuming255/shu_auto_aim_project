@@ -29,6 +29,8 @@ public:
   bool show_and_wait(
     const cv::Mat & drawing, const io::Frame & frame,
     const vision::DetectionResult * detection, const std::function<bool()> & stop_requested);
+  std::chrono::microseconds display_duration() const noexcept { return display_duration_; }
+  std::chrono::microseconds wait_duration() const noexcept { return wait_duration_; }
 
 private:
   void close() noexcept;
@@ -41,6 +43,8 @@ private:
   bool realtime_ = false;
   bool windows_created_ = false;
   bool sized_ = false;
+  std::chrono::microseconds display_duration_{0};
+  std::chrono::microseconds wait_duration_{0};
 };
 
 }  // namespace srm::app

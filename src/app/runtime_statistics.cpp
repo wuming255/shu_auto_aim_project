@@ -40,6 +40,20 @@ void RuntimeStatistics::observe(
       snapshot_.max_step_duration_us, static_cast<std::uint64_t>(duration_us));
   }
   snapshot_.transport = transport;
+  observe_duration(TimingStage::acquisition, result.acquisition_duration);
+  if (result.frame_read) {
+    observe_duration(TimingStage::detection, result.detection_duration);
+    observe_duration(TimingStage::pipeline, result.pipeline_duration);
+  }
+}
+
+void RuntimeStatistics::observe_duration(TimingStage stage, std::chrono::microseconds duration)
+{
+  auto & timing = snapshot_.timings.at(static_cast<std::size_t>(stage));
+  const auto us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, duration.count()));
+  ++timing.sample_count;
+  timing.total_us += us;
+  timing.max_us = std::max(timing.max_us, us);
 }
 
 const RuntimeStatisticsSnapshot & RuntimeStatistics::snapshot() const noexcept
@@ -71,6 +85,16 @@ void RuntimeStatistics::write_summary(std::ostream & output) const
          << "transport_received_frame_count=" << snapshot_.transport.received_frame_count << '\n'
          << "transport_communication_error_count="
          << snapshot_.transport.communication_error_count << '\n';
+  constexpr const char * stages[] = {"acquisition", "detection", "pipeline", "recording", "debug_draw",
+    "debug_save", "gui_display", "gui_wait", "logging", "loop", "recording_close"};
+  for (std::size_t i = 0; i < snapshot_.timings.size(); ++i) {
+    const auto & timing = snapshot_.timings[i];
+    output << stages[i] << "_sample_count=" << timing.sample_count << '\n'
+           << "total_" << stages[i] << "_duration_us=" << timing.total_us << '\n'
+           << "average_" << stages[i] << "_duration_us="
+           << (timing.sample_count ? static_cast<double>(timing.total_us) / timing.sample_count : 0.0) << '\n'
+           << "max_" << stages[i] << "_duration_us=" << timing.max_us << '\n';
+  }
 }
 
 std::string RuntimeStatistics::summary_text() const

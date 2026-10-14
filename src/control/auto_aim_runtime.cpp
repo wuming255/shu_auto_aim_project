@@ -8,6 +8,15 @@
 
 namespace srm::control
 {
+namespace
+{
+struct DurationTimer
+{
+  std::chrono::microseconds & result;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  ~DurationTimer() { result = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start); }
+};
+}
 // 这是构造函数的定义
 AutoAimRuntime::AutoAimRuntime(
   io::FrameSource & frame_source, io::SelfAimTransport & transport,
@@ -26,7 +35,12 @@ RuntimeStepResult AutoAimRuntime::step()
   const auto step_start = std::chrono::steady_clock::now();   // 获取当前时间点
   RuntimeStepResult result;
   io::Frame frame;
-  if (!frame_source_.read(frame)) {     // 读取一帧图像
+  bool read_ok = false;
+  {
+    DurationTimer timer{result.acquisition_duration};
+    read_ok = frame_source_.read(frame);
+  }
+  if (!read_ok) {     // 读取一帧图像
     result.end_of_stream = frame_source_.end_of_stream();
     result.error = result.end_of_stream ? "frame source reached end of stream"
                                         : "frame source read failed";
@@ -51,7 +65,12 @@ RuntimeStepResult AutoAimRuntime::step()
                                 : std::numeric_limits<double>::quiet_NaN();
 
   try {
-    const auto detections = detector_(frame);                               // 尝试识别
+    vision::DetectionResult detections;
+    {
+      DurationTimer timer{result.detection_duration};
+      detections = detector_(frame);
+    }
+    DurationTimer timer{result.pipeline_duration};
     result.pipeline = pipeline_.process(                                    // 尝试加载处理
       detections, frame.timestamp, frame.sequence, bullet_speed);
   } catch (const std::exception & error) {

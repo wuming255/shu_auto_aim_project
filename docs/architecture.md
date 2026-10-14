@@ -16,7 +16,9 @@
 
 - `src/protocol/`：正式自瞄协议编码、解码和流式解析。
 - `src/io/self_aim_transport.*`：正式协议串口收发、后台线程和重连。
-- `src/io/frame_source.*`：图片、视频、OpenCV camera index 和可选 MVS USB 输入抽象，统一输出自有 BGR 图像、单调时间戳、序号和文件源时间。
+- `src/io/frame_source.*`：图片、视频、OpenCV camera index 和可选 MVS USB 输入抽象，统一输出自有 BGR 图像、单调时间戳、序号、文件源时间和处理后方向。
+- `src/io/image_geometry.*`：输入旋转、尺寸/方向元数据和无覆盖 YAML 发布。
+- `src/vision/camera_calibration.*`：棋盘格内参求解、完整 K/畸变与相机到云台 R/t 加载校验。
 - `src/io/mvs_camera.*`：SDK 按需动态加载、生命周期、USB 枚举/选择、节点查询/设置、借帧/转换/归还；厂商头文件与句柄封装在 PImpl 中。
 - `src/app/`：命令行运行入口、配置文件、CSV 运行日志、运行统计、debug 图像和离线 smoke test 入口。
 - `tests/`：协议、传输层伪终端、输入抽象、阶段七闭环和应用支持测试。
@@ -138,7 +140,7 @@ MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选�
 - `src/app/runtime_csv_logger.*` 记录帧序号、帧源时间、候选数量、跟踪状态、数学瞄准结果、安全状态、`fire_flag`、安全原因和错误信息，支持无桌面环境下的离线诊断。
 - `src/app/main.cpp` 使用现有 `TraditionalDetector` 和阶段六/七模块建立 `srm_auto_aim_app`；图片、视频、OpenCV camera index 和 MVS 共用同一运行路径。MVS 枚举/参数查询在创建 transport 前退出。
 - `--dry-run` 不启动传输线程，仅用于输入/检测/日志 smoke test；由于安全控制器会看到 transport 未运行，该模式不会输出有效瞄准命令。
-- 当前入口不负责加载标定文件或修改视觉开火配置；真实标定与 MVS/CDC 现场效果仍由 `questions.md` 验证。
+- 当前入口加载完整内参/畸变与显式外参，不修改视觉开火配置；真实标定与 MVS/CDC 现场效果仍由 `questions.md` 验证。
 
 
 ## 参数文件层（阶段八第二轮）
@@ -169,3 +171,13 @@ MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选�
 - 输入为 `Frame.bgr`，在绘制检测叠加图前写入；不添加四元数/姿态文本。参考 Recorder 的原图保存用途，CSV 仍单独记录现有运行结果和主机时间。
 - 先以独占临时文件存放 AVI，封口后 fsync 并完整解码校验尺寸/帧数，再以同目录硬链接无覆盖发布。异常保留 partial 路径，正常调用显式 `close()` 检查错误，析构提供兜底清理。
 - 录像 FPS 是恒定播放元数据，不限速、不插帧、不假设曝光时间；`step_duration_us` 不包含应用层编码、GUI 或退出校验耗时。
+
+## 标定、方向绑定与分层耗时（第二十轮）
+
+- `srm_calibrate_camera` 是离线图片目录/视频入口，复用 `FrameSource` 的处理后 BGR 和方向；显式棋盘格内角点及方格尺寸，亚像素角点、OpenCV 标定、总体/逐视图 RMS，输出候选 YAML 与检查图，无相机/CDC/GUI 调用。
+- 参考工具使用对称圆点阵和阻塞窗口，当前仅复用平面物点、标定和重投影流程，适配棋盘格及现有 C++17/OpenCV 接口；不迁移旧通信、姿态记录或额外依赖。
+- 相机旋转和文件额外旋转分别配置；录像保存同一处理后 BGR，首帧独占创建 `<录像名>.metadata.yml`。回放读取已有几何，不因相机设置而重复旋转。首帧元数据可能在录像失败后作为诊断保留。
+- 完整内参 YAML 的 K、畸变直接注入 `PoseSolverConfig`，每帧校验尺寸/方向；外参明确处理后 OpenCV 相机坐标、云台 x前/y左/z上与米制平移，按 `p_g=R_g_c*p_c+t_g_c` 使用。旧四参数仅供 dry-run；live 缺完整内外参在 transport 启动前拒绝。
+- runtime 分别记录读帧、检测及检测后算法管线；应用记录日志、录像、debug 绘制/保存、GUI 显示/等待、整次循环及封口回读。阶段平均/最大耗时与样本数写 summary，原 CSV 21 列保持，外层时长和内部阶段不可叠加当作总量。
+- 文件预览剩余等待限制为 1–10 ms，超时不再固定多等 10 ms；暂停仍泵送事件，相机仍为一次 `waitKey(1)`。没有通过跳帧、改变相机节点或采集 FPS 处理预览问题。
+- 本轮仅有合成、离线和模拟 SDK 验证；默认 `allow_visual_fire=false` 且应用不提供视觉开火意图，正式协议与退出安全命令不受标定和诊断功能改变。现场规格、R/t、精度与桌面性能统一记录于 `questions.md`。

@@ -1,5 +1,6 @@
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
-file(REMOVE "${OUTPUT_DIR}/run.avi" "${OUTPUT_DIR}/failure.avi" "${OUTPUT_DIR}/partial-run.avi")
+file(REMOVE "${OUTPUT_DIR}/run.avi" "${OUTPUT_DIR}/failure.avi" "${OUTPUT_DIR}/partial-run.avi"
+  "${OUTPUT_DIR}/run.avi.metadata.yml" "${OUTPUT_DIR}/failure.avi.metadata.yml" "${OUTPUT_DIR}/partial-run.avi.metadata.yml")
 execute_process(COMMAND "${APP}" --list-cameras --mvs-library "${SDK}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 10)
 if(NOT result EQUAL 0 OR NOT output MATCHES "serial=MOCK-A")

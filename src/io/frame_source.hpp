@@ -9,6 +9,8 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 #include "io/mvs_camera.hpp"
+#include "io/image_geometry.hpp"
+#include <optional>
 
 namespace srm::io
 {
@@ -42,6 +44,10 @@ struct FrameSourceConfig
   // OpenCV VideoCapture 后端选择。默认 CAP_ANY，现场适配时可配置为指定后端。
   int api_preference = cv::CAP_ANY;
   MvsCameraConfig mvs{};
+  int camera_rotation_deg = 0;  // Only live camera sources.
+  int file_rotation_deg = 0;    // Only image/video sources; never modifies the source file.
+  std::optional<int> file_orientation_deg{};  // Legacy files without a metadata sidecar.
+  std::optional<ImageGeometry> expected_geometry{};  // Full calibration binding, checked on every frame.
 };
 
 // 单独的读取到的一帧数据
@@ -53,6 +59,7 @@ struct Frame
 
   // 文件输入的源时间，单位为秒；没有可用源时间时为 0。
   double source_time_seconds = 0.0;     // 这一帧在源文件中的时间位置，单位为秒
+  int orientation_deg = 0;  // Delivered pixels, clockwise relative to native sensor pixels.
 };
 
 // 图片、视频、OpenCV camera index 和可选的海康 MVS 输入共用帧接口。
@@ -103,6 +110,7 @@ private:
   std::uint64_t next_sequence_ = 0;         // 下一帧的序号
   std::chrono::steady_clock::time_point last_timestamp_{};      // 上一帧的时间戳
   double nominal_fps_ = 0.0;                // 输入源的名义帧率，文件输入时是文件的帧率，相机输入时是配置的帧率
+  std::optional<ImageGeometry> stored_geometry_;
 };
 
 }  // namespace srm::io

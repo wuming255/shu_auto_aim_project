@@ -9,6 +9,7 @@
 #include "io/frame_source.hpp"
 #include "io/self_aim_transport.hpp"
 #include "vision/traditional_detector.hpp"
+#include "vision/camera_calibration.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -44,12 +45,21 @@ srm::protocol::Command safe_command()   // 生成一条安全的命令，设置f
   return command;
 }
 
-srm::control::AutoAimPipelineConfig make_pipeline_config(const srm::app::ApplicationOptions & options)
+srm::control::AutoAimPipelineConfig make_pipeline_config(
+  const srm::app::ApplicationOptions & options,
+  const std::optional<srm::vision::CameraCalibration> & calibration)
 {
   srm::control::AutoAimPipelineConfig config;
   if (options.intrinsics_set) {
     config.pose_solver.camera_matrix = cv::Matx33d(
       options.fx, 0.0, options.cx, 0.0, options.fy, options.cy, 0.0, 0.0, 1.0); // 创建标准内参矩阵
+  }
+  if (calibration) {
+    config.pose_solver.camera_matrix = calibration->camera_matrix;
+    config.pose_solver.distortion_coefficients = calibration->distortion_coefficients;
+    if (!options.extrinsics_path.empty()) {
+      srm::vision::load_camera_extrinsics(options.extrinsics_path, calibration->geometry, config.pose_solver);
+    }
   }
   return config;
 }
@@ -82,7 +92,8 @@ void save_debug_frame(        // 保存调试图像
 
 void write_summary(     // 写入运行摘要文件
   const std::string & path, const srm::app::RuntimeStatistics & statistics,
-  std::size_t processed_frames, std::size_t log_rows, bool dry_run)
+  std::size_t processed_frames, std::size_t log_rows, bool dry_run,
+  bool calibration_loaded, bool extrinsics_loaded, const std::optional<srm::io::ImageGeometry> & geometry)
 {
   if (path.empty()) return;
 
@@ -92,6 +103,11 @@ void write_summary(     // 写入运行摘要文件
   output << "processed_frames=" << processed_frames << '\n'
          << "log_rows=" << log_rows << '\n'
          << "dry_run=" << (dry_run ? 1 : 0) << '\n';
+  output << "calibration_loaded=" << calibration_loaded << '\n'
+         << "extrinsics_loaded=" << extrinsics_loaded << '\n';
+  if (geometry) output << "image_width=" << geometry->size.width << '\n'
+                       << "image_height=" << geometry->size.height << '\n'
+                       << "orientation_deg=" << geometry->orientation_deg << '\n';
   statistics.write_summary(output);
   output.flush();   // 刷新缓冲区，确保数据写入文件
   if (!output) throw std::runtime_error("failed while writing summary: " + path);
@@ -119,22 +135,35 @@ int main(int argc, const char * const argv[])
       return EXIT_SUCCESS;
     }
 
-    if (!options.intrinsics_set) {
+    std::optional<srm::vision::CameraCalibration> calibration;
+    if (!options.calibration_path.empty()) calibration = srm::vision::load_camera_calibration(options.calibration_path);
+    const auto pipeline_config = make_pipeline_config(options, calibration);
+    if (!options.dry_run && (!calibration || options.extrinsics_path.empty())) {
+      throw std::invalid_argument("--live requires full --calibration and --extrinsics; use --dry-run for uncalibrated input checks");
+    }
+    if (!options.intrinsics_set && !calibration) {
       std::cerr
         << "warning: camera intrinsics are not configured; use --intrinsics fx,fy,cx,cy "
            "before relying on PnP output\n";
     }
+    if (options.intrinsics_set) std::cerr << "warning: legacy intrinsics have no distortion/resolution/orientation binding; dry-run only\n";
+    if (options.extrinsics_path.empty()) std::cerr << "warning: camera-to-gimbal extrinsics are uncalibrated; default axis mapping is for offline diagnostics only\n";
 
     if (options.show_debug) srm::app::DebugViewer::check_environment();
     prepare_debug_directory(options.debug_directory);
 
-    srm::io::FrameSource frame_source(options.frame_source);          // 图像输入模块
+    auto source_config = options.frame_source;
+    if (calibration) source_config.expected_geometry = calibration->geometry;
+    srm::io::FrameSource frame_source(source_config);          // 图像输入模块
     if (frame_source.type() == srm::io::FrameSourceType::mvs_camera) {
       std::cerr << frame_source.description();
     }
     // 在其他输出文件打开前拒绝已有录像（也包括指向同一文件的硬链接）。
     std::optional<srm::app::VideoRecorder> recorder;
     if (!options.record_path.empty()) {
+      if (std::filesystem::symlink_status(options.record_path + ".metadata.yml").type() != std::filesystem::file_type::not_found) {
+        throw std::invalid_argument("recording metadata already exists: " + options.record_path + ".metadata.yml");
+      }
       recorder.emplace(options.record_path,
         srm::app::VideoRecorder::choose_fps(options.record_fps, frame_source.nominal_fps()), options.record_codec);
       std::cerr << "recording raw BGR: path=" << recorder->path() << " fps=" << recorder->fps()
@@ -144,6 +173,12 @@ int main(int argc, const char * const argv[])
     srm::vision::TraditionalDetector detector;                        // 传统视觉检测模块
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
     srm::app::RuntimeStatistics statistics;                           // 运行统计模块，记录各个功能运行了多少次，有什么报错，运行了多久等信息
+    const auto timed = [&statistics](srm::app::TimingStage stage, const auto & action) {
+      const auto start = std::chrono::steady_clock::now();
+      action();
+      statistics.observe_duration(stage, std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start));
+    };
     std::optional<srm::vision::DetectionResult> last_detection;       // 本帧检测结果，供保存和窗口显示使用。
     std::optional<srm::app::DebugViewer> debug_viewer;
     if (options.show_debug) {
@@ -164,7 +199,7 @@ int main(int argc, const char * const argv[])
     }
 
     srm::control::AutoAimRuntime runtime(                             // 一帧图像的总调度模块，安排各个模块的协作和数据流转
-      frame_source, transport, srm::control::AutoAimPipeline(make_pipeline_config(options)),        // 瞄准算法模块
+      frame_source, transport, srm::control::AutoAimPipeline(pipeline_config),        // 瞄准算法模块
       srm::control::SafetyController(),                               // 安全控制模块
       [&detector, &last_detection](const srm::io::Frame & frame) {    // 这个匿名函数输入一帧图像，返回检测结果
         last_detection = detector.detect(frame.bgr);
@@ -178,9 +213,12 @@ int main(int argc, const char * const argv[])
     if (!options.dry_run) transport.start();
 
     std::size_t processed_frames = 0;     // 已处理的帧数
+    std::optional<srm::io::ImageGeometry> delivered_geometry;
     bool acquisition_failed = false;
     while (!stop_requested.load()) {
       if (g_stop_requested != 0) break;
+      const auto loop_start = std::chrono::steady_clock::now();
+      bool viewer_quit = false;
       last_detection.reset();                                       // 清理上一帧的检测结果
 
       auto result = runtime.step();                           // 返回的是一次处理结果的汇总
@@ -193,28 +231,37 @@ int main(int argc, const char * const argv[])
         transport.sent_frame_count(), transport.received_frame_count(),
         transport.communication_error_count()};
       statistics.observe(result, transport_snapshot);           
-      logger.log(result, transport_snapshot);                       // 记录运行日志
+      timed(srm::app::TimingStage::logging, [&] { logger.log(result, transport_snapshot); });
       if (result.frame_read) {                                      // 成功读到了吗？
         ++processed_frames;
         if (result.frame.has_value()) {
           const auto & frame = result.frame.value();
-          if (recorder) recorder->write(frame.bgr);
+          if (!delivered_geometry) {
+            delivered_geometry = srm::io::ImageGeometry{frame.bgr.size(),frame.orientation_deg};
+            if (recorder) srm::io::write_image_geometry(recorder->path() + ".metadata.yml", *delivered_geometry);
+          }
+          if (recorder) timed(srm::app::TimingStage::recording, [&] { recorder->write(frame.bgr); });
           const bool save_debug = last_detection.has_value() && !options.debug_directory.empty() &&
                                   frame.sequence % options.debug_every == 0;
           if (save_debug || debug_viewer.has_value()) {
-            const auto drawing = last_detection.has_value()
-                                   ? detector.draw_debug(frame.bgr, last_detection.value())
-                                   : frame.bgr;
-            if (save_debug) save_debug_frame(options.debug_directory, frame, drawing);
-            if (debug_viewer.has_value() &&
-                !debug_viewer->show_and_wait(
+            cv::Mat drawing;
+            timed(srm::app::TimingStage::debug_draw, [&] {
+              drawing = last_detection.has_value() ? detector.draw_debug(frame.bgr, last_detection.value()) : frame.bgr;
+            });
+            if (save_debug) timed(srm::app::TimingStage::debug_save, [&] { save_debug_frame(options.debug_directory, frame, drawing); });
+            if (debug_viewer.has_value()) {
+              viewer_quit = !debug_viewer->show_and_wait(
                   drawing, frame, last_detection.has_value() ? &last_detection.value() : nullptr,
-                  [] { return g_stop_requested != 0; })) {
-              break;
+                  [] { return g_stop_requested != 0; });
+              statistics.observe_duration(srm::app::TimingStage::gui_display, debug_viewer->display_duration());
+              statistics.observe_duration(srm::app::TimingStage::gui_wait, debug_viewer->wait_duration());
             }
           }
         }
       }
+      statistics.observe_duration(srm::app::TimingStage::loop, std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - loop_start));
+      if (viewer_quit) break;
 
       if (result.end_of_stream || acquisition_failed) break;                            // EOF 或实时取流失败
       if (options.max_frames != 0 && processed_frames >= options.max_frames) break;     // 读到设定的最大帧数就退出
@@ -227,13 +274,14 @@ int main(int argc, const char * const argv[])
     }
 
     if (recorder) {
-      recorder->close();
+      timed(srm::app::TimingStage::recording_close, [&] { recorder->close(); });
       std::cerr << "recorded_frames=" << recorder->frames_written()
                 << " record_path=" << recorder->path() << '\n';
     }
 
     write_summary(        //  写入运行摘要文件
-      options.summary_path, statistics, processed_frames, logger.rows_written(), options.dry_run);
+      options.summary_path, statistics, processed_frames, logger.rows_written(), options.dry_run,
+      calibration.has_value(), !options.extrinsics_path.empty(), delivered_geometry);
 
     std::cerr << "processed_frames=" << processed_frames
               << " log_rows=" << logger.rows_written()

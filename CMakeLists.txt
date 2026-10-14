@@ -59,6 +59,7 @@ target_compile_options(srm_protocol PRIVATE
 )
 
 add_library(srm_frame_source STATIC
+  src/io/image_geometry.cpp
   src/io/frame_source.cpp
   src/io/mvs_camera.cpp
 )
@@ -261,6 +262,16 @@ add_library(srm_app_support STATIC
   src/app/runtime_statistics.cpp
 )
 
+add_library(srm_camera_calibration STATIC src/vision/camera_calibration.cpp)
+target_include_directories(srm_camera_calibration PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(srm_camera_calibration PUBLIC srm_pose_solver srm_frame_source)
+target_compile_options(srm_camera_calibration PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>)
+add_executable(srm_calibrate_camera src/app/calibrate_camera.cpp)
+target_link_libraries(srm_calibrate_camera PRIVATE srm_camera_calibration)
+target_compile_options(srm_calibrate_camera PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>)
+
 target_include_directories(srm_app_support
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -284,6 +295,7 @@ target_link_libraries(srm_auto_aim_app
   PRIVATE
     srm_app_support
     srm_traditional_detector
+    srm_camera_calibration
 )
 
 if(SRM_ENABLE_GUI AND OpenCV_highgui_FOUND)
@@ -300,6 +312,20 @@ target_compile_options(srm_auto_aim_app PRIVATE
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(srm_calibration_test tests/calibration_test.cpp)
+  target_link_libraries(srm_calibration_test PRIVATE srm_camera_calibration)
+  add_test(NAME srm_calibration_test COMMAND srm_calibration_test)
+  add_test(NAME srm_calibration_tool_smoke_test COMMAND ${CMAKE_COMMAND}
+    -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+    -DTOOL=$<TARGET_FILE:srm_calibrate_camera>
+    -DFIXTURES=$<TARGET_FILE:srm_calibration_test>
+    -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/calibration_tool_smoke
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_tool_smoke.cmake)
+  add_test(NAME srm_calibration_app_smoke_test COMMAND ${CMAKE_COMMAND}
+    -DAPP=$<TARGET_FILE:srm_auto_aim_app>
+    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/application_smoke.ppm
+    -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/calibration_smoke
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/calibration_smoke.cmake)
   add_executable(srm_protocol_test
     tests/self_aim_protocol_test.cpp
   )

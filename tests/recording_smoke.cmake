@@ -5,7 +5,7 @@ if(NOT result EQUAL 0)
   message(FATAL_ERROR "cannot generate recording fixture")
 endif()
 set(video "${OUTPUT_DIR}/raw video.avi")
-file(REMOVE "${video}")
+file(REMOVE "${video}" "${video}.metadata.yml" "${OUTPUT_DIR}/unsupported.avi.metadata.yml")
 execute_process(COMMAND "${APP}" --input image --source "${INPUT}" --dry-run
   --loop --max-frames 4 --record "${video}" --record-fps 25 --record-codec FFV1
   --summary "${OUTPUT_DIR}/summary.txt" --debug-dir "${OUTPUT_DIR}/debug"
@@ -17,6 +17,14 @@ execute_process(COMMAND "${VERIFY}" "${video}" 4 25 "${INPUT}" "${OUTPUT_DIR}/de
   RESULT_VARIABLE result TIMEOUT 30)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "recorded frames are not the raw input, or video was not sealed")
+endif()
+file(READ "${video}.metadata.yml" metadata)
+if(NOT metadata MATCHES "image_width: 640" OR NOT metadata MATCHES "orientation_deg: 0")
+  message(FATAL_ERROR "recording geometry metadata missing or incorrect")
+endif()
+file(READ "${OUTPUT_DIR}/summary.txt" summary)
+if(NOT summary MATCHES "recording_sample_count=4" OR NOT summary MATCHES "recording_close_sample_count=1")
+  message(FATAL_ERROR "recording timing did not include every frame and finalization")
 endif()
 file(SHA256 "${video}" before)
 execute_process(COMMAND "${APP}" --input image --source "${INPUT}" --dry-run
@@ -53,3 +61,23 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=DISPLAY --unset=WAYLAN
 if(NOT result EQUAL 1 OR NOT error MATCHES "desktop display|unavailable in this build")
   message(FATAL_ERROR "headless preview diagnosis missing: ${result} ${error}")
 endif()
+set(rotated "${OUTPUT_DIR}/rotated.avi")
+file(REMOVE "${rotated}" "${rotated}.metadata.yml")
+execute_process(COMMAND "${APP}" --input image --source "${INPUT}" --dry-run
+  --loop --max-frames 4 --file-rotation 90 --record "${rotated}" --record-codec FFV1
+  RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "rotated recording failed: ${error}")
+endif()
+execute_process(COMMAND "${APP}" --input video --source "${rotated}" --dry-run
+  --camera-rotation 180 --summary "${OUTPUT_DIR}/replayed.txt"
+  RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "rotated recording replay failed: ${error}")
+endif()
+file(READ "${OUTPUT_DIR}/replayed.txt" replayed)
+foreach(expected "processed_frames=4" "image_width=480" "image_height=640" "orientation_deg=90" "nonzero_fire_request_count=0")
+  if(NOT replayed MATCHES "${expected}")
+    message(FATAL_ERROR "replay must preserve stored orientation without applying camera rotation: ${expected}")
+  endif()
+endforeach()

@@ -23,6 +23,9 @@ struct RuntimeStepResult               // 处理数据汇总struct
   bool end_of_stream = false;          // 是否到达输入源末尾
   std::string error;                   // 错误信息记录
   std::chrono::microseconds step_duration{0};   // 本次 step 从读取帧开始到安全命令写入 transport 的单调耗时。
+  std::chrono::microseconds acquisition_duration{0};
+  std::chrono::microseconds detection_duration{0};
+  std::chrono::microseconds pipeline_duration{0};
 
   std::optional<io::Frame> frame;
   std::optional<AutoAimFrameResult> pipeline;

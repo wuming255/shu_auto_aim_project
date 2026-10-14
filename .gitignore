@@ -2,6 +2,8 @@
 /sp_vision_25-main/
 /replay_debug/
 /temporary_file/
+# 标定原始录像较大；标定 YAML 和说明仍可跟踪。
+/calibration/**/*.avi
 *.log
 *.o
 *.a
