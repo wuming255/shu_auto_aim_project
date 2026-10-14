@@ -256,6 +256,7 @@ target_compile_options(srm_auto_aim_runtime PRIVATE
 )
 
 add_library(srm_app_support STATIC
+  src/app/terminal_quit_input.cpp
   src/app/video_recorder.cpp
   src/app/application_options.cpp
   src/app/runtime_csv_logger.cpp
@@ -312,6 +313,9 @@ target_compile_options(srm_auto_aim_app PRIVATE
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(srm_terminal_quit_test tests/terminal_quit_test.cpp)
+  target_link_libraries(srm_terminal_quit_test PRIVATE srm_app_support util)
+  add_test(NAME srm_terminal_quit_test COMMAND srm_terminal_quit_test)
   add_executable(srm_calibration_test tests/calibration_test.cpp)
   target_link_libraries(srm_calibration_test PRIVATE srm_camera_calibration)
   add_test(NAME srm_calibration_test COMMAND srm_calibration_test)

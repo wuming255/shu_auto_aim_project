@@ -6,6 +6,7 @@
 #include <opencv2/core.hpp>
 
 #include "io/frame_source.hpp"
+#include "app/terminal_quit_input.hpp"
 #include "vision/traditional_detector.hpp"
 
 namespace srm::app
@@ -38,6 +39,7 @@ private:
     const cv::Mat & drawing, const io::Frame & frame, const vision::DetectionResult * detection);
   bool windows_open() const;
 
+  TerminalQuitInput terminal_input_;
   std::chrono::steady_clock::duration frame_period_{};
   bool paused_ = false;
   bool realtime_ = false;

@@ -141,7 +141,9 @@ bash run.sh mvs --show-debug --max-frames 0
 bash run.sh mvs --show-debug --max-frames 0 --record replay_debug/camera-01.avi
 ```
 
-MVS 和 OpenCV camera 每次成功处理帧后刷新同一套检测叠加图/亮度 mask 窗口。相机模式仅调用一次 `waitKey(1)` 处理 GUI 事件，无回放节流、不响应空格暂停或 n 单步；显式 `--start-paused` 或非零 `--playback-fps` 会报错。q/Esc、关闭任一窗口或停止信号正常结束，释放窗口/相机并封口录像。GUI 后端仍有调度开销，且当前 SDK 等帧调用未返回前无法处理按键；响应延迟还受取帧超时和处理耗时影响，不能作为硬实时控制入口。
+MVS 和 OpenCV camera 每次成功处理帧后刷新同一套检测叠加图/亮度 mask 窗口。相机模式调用一次 `waitKey(10)` 给 GTK3 后端留出按键事件处理时间，修复快速刷新时 1 ms 等待无法可靠返回按键的问题；没有文件回放 deadline，不响应空格暂停或 n 单步，显式 `--start-paused` 或非零 `--playback-fps` 会报错。这项 GUI 等待会增加预览循环开销，实际耗时见 `gui_wait`。q/Q/Esc、关闭任一窗口或停止信号正常结束。GUI 后端仍有调度开销，且当前 SDK 等帧调用未返回前无法处理按键；响应延迟还受取帧超时和处理耗时影响，不能作为硬实时控制入口。
+
+启用调试窗口时，也可在启动程序的前台终端按 q/Q/Esc，无需回车；暂停回放期间同样有效。终端临时关闭行缓冲和回显，保留 Ctrl+C 信号，并在正常或异常退出时恢复原设置；非终端标准输入不会被读取。终端方向键等转义序列以 Esc 开头，也会触发退出。窗口按键需先点击检测或 mask 窗口获得焦点。收到退出请求后先关闭窗口、恢复终端，再封口录像；终端显示 `finalizing recording` 时是在完整回读校验长录像，进程可能继续等待校验完成。
 
 有桌面显示服务和 HighGUI 后端时，可逐帧查看视频的传统检测结果：
 

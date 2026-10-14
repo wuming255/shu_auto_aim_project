@@ -43,7 +43,9 @@ CTest 至少应包含：
 - 标定工具图片目录/视频输出及主程序完整标定加载；
 - `srm_auto_aim_app` 离线 smoke test。
 
-MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误、采集失败摘要和录像封口；测试不要求真实 SDK 或相机。另有 `srm_launcher_smoke_test` 验证启动脚本，`srm_video_recording_test` 和 `srm_recording_app_smoke_test` 验证真实编解码、原图录像、文件保护、写入失败、封口与无桌面诊断。当前有头文件/MVS 构建注册 21 项，关闭 MVS 或缺头文件时减少两项，为 19 项；用 `ctest --test-dir build -N` 查看实际列表。每轮实际执行范围与结果以对应开发日志为准。
+MVS 启用时额外包含 `srm_mvs_camera_test` 和 `srm_mvs_app_smoke_test`：用模拟 SDK 验证选择、参数、帧缓冲所有权、清理、缺符号/版本错误、采集失败摘要和录像封口；测试不要求真实 SDK 或相机。另有 `srm_launcher_smoke_test` 验证启动脚本，`srm_video_recording_test` 和 `srm_recording_app_smoke_test` 验证真实编解码、原图录像、文件保护、写入失败、封口与无桌面诊断，`srm_terminal_quit_test` 使用伪终端检查无回车退出和终端恢复。当前有头文件/MVS 构建注册 22 项，关闭 MVS 或缺头文件时减少两项，为 20 项；用 `ctest --test-dir build -N` 查看实际列表。每轮实际执行范围与结果以对应开发日志为准。
+
+在可访问的 GTK/X11 桌面可手动执行 `python3 tests/debug_viewer_interaction.py`，验证两个窗口及终端的 q/Q/Esc、暂停时退出、录像封口、窗口关闭与终端恢复。脚本使用 libX11/libXtst 和模拟 SDK，拒绝已有 SRM 窗口；不注册为无桌面 CTest，不代表 NUC 桌面验收。
 
 录像及其自动化测试要求 OpenCV 带 FFmpeg 视频后端、MJPG/FFV1 编解码器。应用不额外启动 ffmpeg 命令行进程；不开录像时不依赖这些编码器。录像本身不需要 HighGUI；预览需要 HighGUI 和可访问的桌面显示服务。录像目录需支持同目录硬链接，以便无覆盖发布，详细行为见 [原始 BGR 录像](application.md#原始-bgr-录像)。
 

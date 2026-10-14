@@ -164,7 +164,7 @@ bool DebugViewer::show_and_wait(
 #ifdef SRM_HAVE_HIGHGUI
   display_duration_ = std::chrono::microseconds{0};
   wait_duration_ = std::chrono::microseconds{0};
-  if (stop_requested() || (sized_ && !windows_open())) return false;
+  if (stop_requested() || terminal_input_.quit_requested() || (sized_ && !windows_open())) return false;
   const auto display_start = std::chrono::steady_clock::now();
   show_drawing(drawing, frame, detection);
   const cv::Mat mask = detection != nullptr && !detection->brightness_mask.empty()
@@ -187,17 +187,17 @@ bool DebugViewer::show_and_wait(
   } wait_timer{wait_duration_};
 
   if (realtime_) {
-    // 必须泵送 HighGUI 事件；不添加回放 deadline，不响应暂停/单步。
-    // waitKey(1) 的实际 GUI 调度耗时由后端决定，不是硬实时保证。
-    const int key = cv::waitKey(1);
+    // GTK3 连续刷新时 1 ms 事件等待可能在按键处理前超时；给事件分发保留 10 ms。
+    // 不添加文件回放 deadline，不响应暂停/单步；实际耗时受 GUI 后端影响。
+    const int key = cv::waitKey(10);
     const int character = key < 0 ? -1 : key & 0xff;
-    return !stop_requested() && windows_open() && character != 'q' &&
+    return !stop_requested() && !terminal_input_.quit_requested() && windows_open() && character != 'q' &&
            character != 'Q' && character != 27;
   }
 
   // 计入本帧检测/保存耗时；处理慢于目标帧率时逐帧显示，不跳帧追赶。
   auto deadline = frame.timestamp + frame_period_;
-  while (!stop_requested()) {
+  while (!stop_requested() && !terminal_input_.quit_requested()) {
     const int key = cv::waitKey(playback_wait_ms(paused_, deadline, std::chrono::steady_clock::now()));
     if (!windows_open()) return false;
     if (key >= 0) {

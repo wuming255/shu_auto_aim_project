@@ -268,12 +268,15 @@ int main(int argc, const char * const argv[])
       if (!result.frame_read && (!options.dry_run && !transport.running())) break;      // 读不到帧了，且串口线程也没在运行，就退出
     }
 
+    // Close the preview and restore terminal input before potentially slow recording validation.
+    debug_viewer.reset();
     if (!options.dry_run) {         // 如果不是离线运行模式，就发送一条安全命令，关闭串口线程
       (void)transport.send_command_now(safe_command());
       transport.stop();
     }
 
     if (recorder) {
+      std::cerr << "finalizing recording (full decode verification): " << recorder->path() << '\n';
       timed(srm::app::TimingStage::recording_close, [&] { recorder->close(); });
       std::cerr << "recorded_frames=" << recorder->frames_written()
                 << " record_path=" << recorder->path() << '\n';
