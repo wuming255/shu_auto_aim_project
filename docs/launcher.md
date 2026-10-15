@@ -104,6 +104,7 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 | `--camera-index N` | `input.camera_index` | OpenCV 设备索引，默认 0 |
 | `--max-frames N` | `runtime.max_frames` | 默认 0，不限制 |
 | `--loop` / `--no-loop` | `input.loop` | 循环文件输入，默认 false |
+| `--require-center-pattern` / `--no-center-pattern` | `detector.require_center_pattern` | 中央亮图案检查，默认 true，抑制相邻目标空隙误配 |
 | `--show-debug` / `--no-show-debug` | `runtime.show_debug` | 两个检测窗口，默认 false；相机实时预览 |
 | `--start-paused` / `--no-start-paused` | `runtime.start_paused` | 视频首帧暂停，默认 false；图片窗口自动暂停 |
 | `--playback-fps FPS` | `runtime.playback_fps` | 窗口播放速度；0 自动，非零范围 0.1–1000 |
@@ -117,6 +118,8 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 窗口显示检测叠加图与亮度二值图，均可用 **q/Esc**或关闭任一窗口退出。文件回放还支持**空格**暂停/继续、**n**单步；相机预览忽略这两个键，拒绝显式暂停/非零播放速度选项。窗口仅支持 dry-run，依赖 HighGUI 和桌面环境。缺少支持时明确报错，不能把 GUI 加入 live 控制流程。窗口回放的暂停/变速会改变跟踪时间间隔，主要用于观察检测。
 
 开启窗口后，启动程序的前台终端也支持 q/Q/Esc 退出，无需回车；窗口内按键须先点击窗口取得焦点。相机 GUI 事件等待为 10 ms，实际开销写入 `gui_wait`。退出时先关闭窗口；若录制了长视频，终端提示 `finalizing recording` 后仍需等待封口和完整回读完成。
+
+中央图案检查适用于当前录像中带亮色数字的装甲板；无标记或暗色标记时可追加 `--no-center-pattern`，关闭后可能重新出现空隙误配。它不识别数字身份，模糊或遮挡仍可能漏检；流程、对照方法和适用限制见 [传统检测说明](traditional_detector.md)。
 
 `build/srm_calibrate_camera` 是独立的离线标定入口，不通过脚本模式启动。先实测板型、内角点行列和方格尺寸，再按 [标定说明](calibration.md) 处理图片目录或视频。相机与文件方向分开设置；方向在输入层生效，检测、预览和录像保持一致。新录像自动携带已存方向，回放通常无需再旋转。
 

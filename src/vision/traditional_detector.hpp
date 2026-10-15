@@ -37,6 +37,15 @@ struct TraditionalDetectorConfig        // 检测器配置文件
 
   // 红蓝通道差小于该值时不把灯条归类为任一颜色。
   double min_color_difference = 10.0;
+
+  // 轮廓面积 / 最小外接旋转矩形面积，排除稀疏的弯折亮区域。
+  double min_lightbar_fill_ratio = 0.35;
+
+  // 对带有中央亮色标记的靶板检查图案证据；不是数字身份分类器。
+  bool require_center_pattern = true;
+  double min_pattern_contrast = 6.0;
+  // 连通图案的最小高度 / 矫正后的灯条长度。
+  double min_pattern_height_ratio = 0.5;
 };
 
 struct LightbarObservation      // 一根灯条的检测结果
@@ -99,6 +108,9 @@ private:
 
   bool valid_lightbar(const LightbarObservation & lightbar) const;      // 判断灯条合理性
   bool valid_armor(const ArmorObservation & armor) const;               // 判断装甲板合理性
+  static bool contains_light(
+    const ArmorObservation & armor, const std::vector<LightbarObservation> & lightbars);
+  bool valid_center_pattern(const cv::Mat & bgr_image, const ArmorObservation & armor) const;
   LightColor classify_color(                                            // 灯条颜色分类
     const cv::Mat & bgr_image, const std::vector<cv::Point> & contour) const;
   cv::Rect make_roi(const ArmorObservation & armor, const cv::Size & image_size) const;       // 识别关注区域

@@ -170,7 +170,9 @@ int main(int argc, const char * const argv[])
                 << " codec=" << options.record_codec << '\n';
     }
     srm::io::SelfAimTransport transport(options.transport);           // 串口通信模块
-    srm::vision::TraditionalDetector detector;                        // 传统视觉检测模块
+    srm::vision::TraditionalDetectorConfig detector_config;
+    detector_config.require_center_pattern = options.require_center_pattern;
+    srm::vision::TraditionalDetector detector(detector_config);       // 传统视觉检测模块
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
     srm::app::RuntimeStatistics statistics;                           // 运行统计模块，记录各个功能运行了多少次，有什么报错，运行了多久等信息
     const auto timed = [&statistics](srm::app::TimingStage stage, const auto & action) {

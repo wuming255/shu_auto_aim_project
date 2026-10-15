@@ -70,6 +70,7 @@ build/srm_auto_aim_app \
 - `--summary PATH`：写入 key=value 运行摘要；
 - `--debug-dir PATH`：创建目录并保存传统检测 debug 图像；为空时不保存；
 - `--debug-every N`：每隔 N 个输入序号保存一张 debug 图，默认 `1`；
+- `--require-center-pattern` / `--no-center-pattern`：开启或关闭中央亮图案检查，默认开启，用于排除相邻装甲板之间的空隙误配；
 - `--show-debug` / `--no-show-debug`：开启或关闭可选窗口，默认关闭，仅支持 dry-run；文件输入可回放交互，相机输入实时刷新；
 - `--playback-fps FPS`：窗口播放帧率，`0` 自动选择，非零值范围为 `[0.1, 1000]`；
 - `--start-paused` / `--no-start-paused`：视频是否在第一帧暂停，默认不暂停；
@@ -85,6 +86,8 @@ build/srm_auto_aim_app \
 `--debug-dir` 会在启动时创建目录（包括必要的父目录）；图像文件命名为 `frame_000000.png`、`frame_000001.png` 等，编号使用 `Frame.sequence`。图像由 `TraditionalDetector::draw_debug()` 生成，不打开 GUI 窗口；当检测回调成功且序号满足 `debug-every` 时才写出。
 
 未提供标定时，dry-run 仍可用于输入和检测 smoke test，但会明确警告；上面的四参数示例不是现场标定。`--live` 必须提供完整 `--calibration` 和 `--extrinsics`，缺失时在启动 CDC 前拒绝。
+
+传统检测默认要求两灯之间存在居中的亮色图案，适用于当前录像中的亮色数字靶板；无标记或暗色标记时可显式使用 `--no-center-pattern`，但可能重新出现空隙误配。它不识别数字身份，严重遮挡、模糊或低对比度仍可能漏检。流程、参考设计、许可和查看方法见 [传统检测说明](traditional_detector.md)。
 
 ## 完整标定与输入方向
 
@@ -231,6 +234,7 @@ runtime.playback_fps=0
 runtime.record=
 runtime.record_fps=0
 runtime.record_codec=MJPG
+detector.require_center_pattern=true
 camera.intrinsics=800,800,320,240
 camera.rotation_deg=0
 ```
@@ -262,6 +266,7 @@ camera.rotation_deg=0
 - `runtime.record`
 - `runtime.record_fps`
 - `runtime.record_codec`
+- `detector.require_center_pattern`
 - `camera.intrinsics`
 - `camera.calibration`
 - `camera.extrinsics`

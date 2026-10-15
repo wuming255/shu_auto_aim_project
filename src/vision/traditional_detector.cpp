@@ -6,6 +6,11 @@
 #include <stdexcept>
 #include <utility>
 
+// 本轮灯条筛选、跨灯排除和中央图案提取适配自 rm_auto_aim 参考实现。
+// Copyright (c) 2022 ChenJun
+// Copyright (C) 2024 Zheng Yu
+// 上游 MIT 许可及本项目适配范围见 docs/traditional_detector.md。
+
 namespace srm::vision
 {
 
@@ -75,6 +80,13 @@ TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : con
       config_.min_color_difference > 255.0) {
     throw std::invalid_argument("invalid traditional detector geometry configuration");
   }
+  if (!finite_non_negative(config_.min_lightbar_fill_ratio) ||
+      config_.min_lightbar_fill_ratio > 1.0 ||
+      !finite_non_negative(config_.min_pattern_contrast) || config_.min_pattern_contrast > 255.0 ||
+      !std::isfinite(config_.min_pattern_height_ratio) || config_.min_pattern_height_ratio <= 0.0 ||
+      config_.min_pattern_height_ratio > 2.0) {
+    throw std::invalid_argument("invalid traditional detector appearance configuration");
+  }
 
   max_lightbar_angle_error_rad_ = config_.max_lightbar_angle_error_deg * kPi / 180.0;   // 灯条和竖向差角的最大值，弧度表示
   max_rectangular_error_rad_ = config_.max_rectangular_error_deg * kPi / 180.0;         // 灯条和横向差角的最大值，弧度表示
@@ -109,6 +121,11 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
     const auto rotated_rect = cv::minAreaRect(contour);
     auto lightbar = make_lightbar(rotated_rect, lightbar_id);     // 识别灯条的
     if (!valid_lightbar(lightbar)) continue;        // 判断灯条合理性的
+    // 参考 FaterYU 2024 检测器的填充率筛选，使用连续轮廓面积避免小灯条像素计数偏大。
+    const auto rect_area = static_cast<double>(rotated_rect.size.area());
+    if (rect_area <= 0.0 || cv::contourArea(contour) / rect_area < config_.min_lightbar_fill_ratio) {
+      continue;
+    }
 
     lightbar.color = classify_color(bgr_image, contour);      // 判断灯条颜色
     if (lightbar.color == LightColor::unknown) continue;
@@ -154,6 +171,8 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
       armor.rectangular_error = std::max(left_error, right_error);
 
       if (!valid_armor(armor)) continue;                  // 这里面写了对方向角的要求
+      if (contains_light(armor, result.lightbars)) continue;
+      if (config_.require_center_pattern && !valid_center_pattern(bgr_image, armor)) continue;
       armor.roi = make_roi(armor, bgr_image.size());      // 装甲板合格就生成关注区域
       if (armor.roi.empty()) continue;
       result.armors.push_back(std::move(armor));        // 成功生成关注区域后加入装甲板列表
@@ -241,26 +260,85 @@ bool TraditionalDetector::valid_armor(const ArmorObservation & armor) const
          armor.rectangular_error < max_rectangular_error_rad_;
 }
 
-LightColor TraditionalDetector::classify_color(                         // 统计灯条轮廓上红蓝两个像素点的数量
+bool TraditionalDetector::contains_light(
+  const ArmorObservation & armor, const std::vector<LightbarObservation> & lightbars)
+{
+  // 参考两个 rm_auto_aim 的 containLight；用实际四边形避免倾斜目标的 AABB 误排除。
+  const std::vector<cv::Point2f> polygon(armor.points.begin(), armor.points.end());
+  for (const auto & light : lightbars) {
+    if (light.id == armor.left.id || light.id == armor.right.id) continue;
+    for (const auto & point : {light.top, light.center, light.bottom}) {
+      if (cv::pointPolygonTest(polygon, point, false) >= 0.0) return true;
+    }
+  }
+  return false;
+}
+
+bool TraditionalDetector::valid_center_pattern(
+  const cv::Mat & bgr_image, const ArmorObservation & armor) const
+{
+  // 沿用参考项目 extractNumbers 的透视矫正/向上下扩展思路；适配本项目 TL/TR/BR/BL。
+  // 保留中央 60%，避开两侧发光灯条，数字可能高于灯条，故不只裁灯条之间的高度。
+  constexpr int kWidth = 64;
+  constexpr int kHeight = 56;
+  constexpr int kLightLength = 24;
+  const std::array<cv::Point2f, 4> target{{{0, 16}, {63, 16}, {63, 40}, {0, 40}}};
+  const auto transform = cv::getPerspectiveTransform(armor.points.data(), target.data());
+  cv::Mat warped;
+  cv::warpPerspective(bgr_image, warped, transform, {kWidth, kHeight});
+  cv::Mat gray;
+  cv::cvtColor(warped(cv::Rect(13, 0, 38, kHeight)), gray, cv::COLOR_BGR2GRAY);
+  cv::GaussianBlur(gray, gray, {3, 3}, 0);
+  // 从灯条附近的中央高度估计阈值，避免上下扩展区的亮背景淹没暗数字。
+  // 二值化和连通域检查仍使用完整高度，保留数字的上下笔画和边界排除依据。
+  const auto threshold_region = gray(cv::Rect(0, 16, gray.cols, kLightLength));
+  double minimum = 0.0;
+  double maximum = 0.0;
+  cv::minMaxLoc(threshold_region, &minimum, &maximum);
+  if (maximum - minimum < config_.min_pattern_contrast) return false;
+
+  cv::Mat binary;
+  // 对比度门限用于拒绝低幅噪声；二值化仍由 Otsu 自适应，保留亮度不均的暗数字。
+  const auto threshold = cv::threshold(
+    threshold_region, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+  cv::threshold(gray, binary, threshold, 255, cv::THRESH_BINARY);
+  cv::Mat labels;
+  cv::Mat stats;
+  cv::Mat centroids;
+  const auto count = cv::connectedComponentsWithStats(binary, labels, stats, centroids);
+  for (int index = 1; index < count; ++index) {
+    const auto width = stats.at<int>(index, cv::CC_STAT_WIDTH);
+    const auto height = stats.at<int>(index, cv::CC_STAT_HEIGHT);
+    const auto top = stats.at<int>(index, cv::CC_STAT_TOP);
+    const auto area = stats.at<int>(index, cv::CC_STAT_AREA);
+    const auto x = centroids.at<double>(index, 0);
+    const auto y = centroids.at<double>(index, 1);
+    // 至少有一块居中的连通亮图案；细小螺丝、满幅亮背景、上下贯穿纹理不构成证据。
+    if (width >= 2 && height >= config_.min_pattern_height_ratio * kLightLength &&
+        area >= 0.02 * binary.total() && area <= 0.6 * binary.total() &&
+        top > 0 && top + height < kHeight &&
+        x >= 0.25 * binary.cols && x <= 0.75 * binary.cols &&
+        top <= kHeight / 2 && top + height > kHeight / 2 &&
+        y >= 0.35 * kHeight && y <= 0.65 * kHeight) {
+      return true;
+    }
+  }
+  return false;
+}
+
+LightColor TraditionalDetector::classify_color(
   const cv::Mat & bgr_image, const std::vector<cv::Point> & contour) const
 {
-  double red_sum = 0.0;
-  double blue_sum = 0.0;
-  std::size_t count = 0;
-  for (const auto & point : contour) {
-    if (point.x < 0 || point.x >= bgr_image.cols || point.y < 0 || point.y >= bgr_image.rows) {
-      continue;
-    }
-    const auto pixel = bgr_image.at<cv::Vec3b>(point);        // 读取像素
-    blue_sum += pixel[0];
-    red_sum += pixel[2];
-    ++count;
-  }
-
-  if (count == 0 || std::abs(blue_sum - red_sum) < config_.min_color_difference * count) {      // 比较差异点数量和阈值
+  // 在轮廓内部统计 BGR，包含颜色核心而不混入外接矩形的背景。
+  const auto rect = cv::boundingRect(contour);
+  cv::Mat mask = cv::Mat::zeros(rect.size(), CV_8UC1);
+  cv::drawContours(mask, std::vector<std::vector<cv::Point>>{contour}, 0, cv::Scalar(255),
+                   cv::FILLED, cv::LINE_8, cv::noArray(), 0, -rect.tl());
+  const auto mean = cv::mean(bgr_image(rect), mask);
+  if (std::abs(mean[0] - mean[2]) < config_.min_color_difference || mean[0] == mean[2]) {
     return LightColor::unknown;
   }
-  return blue_sum > red_sum ? LightColor::blue : LightColor::red;
+  return mean[0] > mean[2] ? LightColor::blue : LightColor::red;
 }
 
 cv::Rect TraditionalDetector::make_roi(

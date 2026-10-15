@@ -248,6 +248,8 @@ void apply_config_entry(
     options.record_fps = parse_double(value, context.c_str());
   } else if (key == "runtime.record_codec") {
     options.record_codec = value;
+  } else if (key == "detector.require_center_pattern") {
+    options.require_center_pattern = parse_bool(value, context.c_str());
   } else if (key == "camera.intrinsics") {
     parse_intrinsics(options, value, context.c_str());
   } else {
@@ -496,6 +498,10 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       options.show_debug = argument == "--show-debug";
       continue;
     }
+    if (argument == "--require-center-pattern" || argument == "--no-center-pattern") {
+      options.require_center_pattern = argument == "--require-center-pattern";
+      continue;
+    }
     if (argument == "--start-paused" || argument == "--no-start-paused") {
       options.start_paused = argument == "--start-paused";
       continue;
@@ -583,6 +589,7 @@ std::string usage(const char * program_name)
     << "  --summary PATH              write key=value replay summary\n"
     << "  --debug-dir PATH            save detector debug images\n"
     << "  --debug-every N             save every Nth frame (default: 1)\n"
+    << "  --require-center-pattern/--no-center-pattern  central bright marking check (default: on)\n"
     << "  --show-debug/--no-show-debug  dry-run windows; camera preview has no pause/pacing\n"
     << "  --playback-fps FPS          window playback rate; 0=source or 30 (default)\n"
     << "                             nonzero FPS must be within [0.1, 1000]\n"

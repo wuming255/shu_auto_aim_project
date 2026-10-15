@@ -231,6 +231,30 @@ void test_recording_options()
   ::unlink(path.c_str());
 }
 
+void test_center_pattern_options()
+{
+  assert(srm::app::usage("test_app").find("--no-center-pattern") != std::string::npos);
+  assert(parse({}).require_center_pattern);
+  assert(!parse({"--no-center-pattern"}).require_center_pattern);
+  assert(parse({"--no-center-pattern", "--require-center-pattern"}).require_center_pattern);
+  const auto path = "/tmp/shu_auto_aim_pattern_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream out(path);
+    out << "detector.require_center_pattern=false\n";
+  }
+  assert(!parse_dynamic({"--config", path}).require_center_pattern);
+  assert(parse_dynamic({"--config", path, "--require-center-pattern"}).require_center_pattern);
+  {
+    std::ofstream out(path);
+    out << "detector.require_center_pattern=invalid\n";
+  }
+  bool rejected = false;
+  try { (void)parse_dynamic({"--config", path}); }
+  catch (const std::invalid_argument &) { rejected = true; }
+  assert(rejected);
+  ::unlink(path.c_str());
+}
+
 
 void test_config_file_and_cli_override()
 {
@@ -480,6 +504,7 @@ int main()
   test_command_line_validation();
   test_mvs_options();
   test_recording_options();
+  test_center_pattern_options();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
   test_runtime_csv_missing_values();
