@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <poll.h>
 #include <stdexcept>
 #include <string>
@@ -159,13 +160,13 @@ std::int32_t read_i32(const std::vector<std::uint8_t> & data, std::size_t offset
   return static_cast<std::int32_t>(bits);
 }
 
-std::vector<std::uint8_t> make_incoming_frame(float bullet_speed)
+std::vector<std::uint8_t> make_incoming_frame(float bullet_speed, float yaw = 0, float pitch = 0)
 {
   std::vector<std::uint8_t> frame(srm::protocol::kIncomingFrameLength, 0);
   write_u16(frame, 0, 28);
   write_i16(frame, 2, 1);
-  write_f32(frame, 4, 0.0F);
-  write_f32(frame, 8, 0.0F);
+  write_f32(frame, 4, yaw);
+  write_f32(frame, 8, pitch);
   write_f32(frame, 12, 0.0F);
   write_i32(frame, 16, 0);
   write_i32(frame, 20, 0);
@@ -348,6 +349,63 @@ void test_runtime_closed_loop_and_safety_fallback()
   ::unlink(image_path.c_str());
 }
 
+void test_fixed_speed_follow_sends_absolute_non_firing_command()
+{
+  const auto path = "/tmp/shu_follow_" + std::to_string(::getpid()) + ".png";
+  assert(cv::imwrite(path, cv::Mat::zeros(16,16,CV_8UC3)));
+  PtyPair pty;
+  SelfAimTransport transport(make_transport_config(pty.slave_path()));
+  transport.start();
+  assert(transport.wait_until_connected(500ms));
+  FrameSourceConfig source_config;
+  source_config.type = FrameSourceType::image_file;
+  source_config.uri = path;
+  source_config.loop = true;
+  FrameSource source(source_config);
+  auto config = make_pipeline_config();
+  config.follow_target = true;
+  config.rotation.enabled = true;
+  config.rotation.feedback_frame_confirmed = true;
+  SafetyControllerConfig safety;
+  safety.fixed_bullet_speed_m_s = 22;
+  bool visible = true;
+  AutoAimRuntime runtime(source, transport, srm::control::AutoAimPipeline(config),
+    SafetyController(safety), [&](const Frame &) {
+      DetectionResult detections;
+      if (visible) detections.armors.push_back(make_armor(config.pose_solver, 0));
+      return detections;
+    });
+  for (const float raw_speed : {0.0F, std::numeric_limits<float>::quiet_NaN(), 30.0F}) {
+    const auto before = transport.received_frame_count();
+    pty.write_all(make_incoming_frame(raw_speed, 350, -10));
+    const auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (transport.received_frame_count() == before && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(1ms);
+    }
+    assert(transport.received_frame_count() > before);
+    const auto aimed = runtime.step();
+    assert(aimed.pipeline && aimed.pipeline->aim.bullet_speed_m_s == 22);
+    assert(aimed.feedback);
+    assert(aimed.decision_timestamp && *aimed.decision_timestamp >= aimed.feedback->timestamp);
+    if (std::isnan(raw_speed)) assert(std::isnan(aimed.feedback->state.shoot.bullet_speed));
+    else assert(aimed.feedback->state.shoot.bullet_speed == raw_speed);
+    assert(aimed.safety.aim_command_valid);
+    assert(std::abs(aimed.safety.command.gimbal.yaw - 350) < 0.001);
+    assert(aimed.safety.command.gimbal.pitch < -12.8 && aimed.safety.command.gimbal.pitch > -13.0);
+    assert(aimed.safety.command.fire.fire_flag == 0);
+    assert(wait_for_matching_command(pty, aimed.safety.command.gimbal.yaw,
+      aimed.safety.command.gimbal.pitch, 1s));
+  }
+  visible = false;
+  const auto lost = runtime.step();
+  assert(!lost.safety.aim_command_valid && lost.safety.command.fire.fire_flag == 0);
+  // 当前反馈新鲜时，丢目标保持当前姿态，避免反复跳回零位。
+  assert(std::abs(lost.safety.command.gimbal.yaw - 350) < 0.001);
+  assert(std::abs(lost.safety.command.gimbal.pitch + 10) < 0.001);
+  transport.stop();
+  ::unlink(path.c_str());
+}
+
 void test_runtime_end_of_stream_is_safe_and_stops_transport()
 {
   const auto image_path =
@@ -422,6 +480,7 @@ void test_video_motion_time_does_not_follow_processing_delay()
 
 int main()
 {
+  test_fixed_speed_follow_sends_absolute_non_firing_command();
   test_runtime_closed_loop_and_safety_fallback();
   test_runtime_end_of_stream_is_safe_and_stops_transport();
   test_video_motion_time_does_not_follow_processing_delay();

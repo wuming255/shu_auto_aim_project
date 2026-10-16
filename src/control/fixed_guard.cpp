@@ -21,6 +21,8 @@ FixedGuardResult FixedGuardController::update(
   double bullet_speed_m_s, std::chrono::steady_clock::time_point timestamp)
 {
   FixedGuardResult result;
+  // 模型未就绪时也保留输入，避免把默认 0 误记为下位机弹速异常。
+  result.aim.bullet_speed_m_s = bullet_speed_m_s;
   result.target_visible = rotation.current_visible;
 
   if (!rotation.current_visible && rotation.observation_age_seconds > config_.max_hold_seconds) {

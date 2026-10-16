@@ -206,7 +206,12 @@ bool apply_vision_entry(ApplicationOptions & options, const std::string & key,
 {
   auto & classifier = options.classifier;
   auto & rotation = options.rotation;
-  if (key == "detector.classifier.enabled") classifier.enabled = parse_bool(value, context);
+  if (key == "aim.follow_target") options.follow_target = parse_bool(value, context);
+  else if (key == "aim.fixed_bullet_speed_m_s") {
+    if (value == "referee") options.safety.fixed_bullet_speed_m_s.reset();
+    else options.safety.fixed_bullet_speed_m_s = parse_double(value, context);
+  }
+  else if (key == "detector.classifier.enabled") classifier.enabled = parse_bool(value, context);
   else if (key == "detector.classifier.model") classifier.model_path = value;
   else if (key == "detector.classifier.labels") classifier.label_path = value;
   else if (key == "detector.classifier.min_confidence") classifier.min_confidence = parse_double(value, context);
@@ -550,6 +555,10 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       options.rotation.enabled = argument == "--rotation";
       continue;
     }
+    if (argument == "--follow-target" || argument == "--no-follow-target") {
+      options.follow_target = argument == "--follow-target";
+      continue;
+    }
     if (argument == "--static-camera" || argument == "--no-static-camera") {
       options.rotation.assume_static_camera = argument == "--static-camera";
       continue;
@@ -568,6 +577,7 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       {"--classifier-model", "detector.classifier.model"},
       {"--classifier-labels", "detector.classifier.labels"},
       {"--classifier-confidence", "detector.classifier.min_confidence"},
+      {"--fixed-bullet-speed", "aim.fixed_bullet_speed_m_s"},
       {"--rotation-tilt", "rotation.mounting_tilt_rad"}};
     bool vision_option = false;
     for (const auto & entry : vision_options) {
@@ -745,6 +755,8 @@ std::string usage(const char * program_name)
     << "  --classifier-labels PATH    label file including negative class\n"
     << "  --classifier-confidence P   acceptance threshold in (0.5,1] (default: 0.7)\n"
     << "  --rotation/--no-rotation    independent four-plate estimator (default: on)\n"
+    << "  --follow-target/--no-follow-target  non-firing current-target follow; bypass rotation lock\n"
+    << "  --fixed-bullet-speed MPS|referee  temporary speed override; forces fire_flag=0\n"
     << "  --feature-size W,H          measured light endpoint width,height in metres\n"
     << "  --static-camera/--no-static-camera  explicit fixed camera assumption (dry-run files only)\n"
     << "  --rotation-tilt RAD|unknown  measured mounting tilt; unknown=estimate with quality gates\n"

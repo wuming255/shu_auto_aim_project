@@ -34,6 +34,7 @@ RuntimeStepResult AutoAimRuntime::step()
 {
   const auto step_start = std::chrono::steady_clock::now();   // 获取当前时间点
   RuntimeStepResult result;
+  result.bullet_speed_overridden = safety_controller_.config().fixed_bullet_speed_m_s.has_value();
   io::Frame frame;
   bool read_ok = false;
   {
@@ -47,6 +48,7 @@ RuntimeStepResult AutoAimRuntime::step()
     pipeline_.reset();          // 重置瞄准算法模块，清除跟踪状态
 
     const auto decision_now = std::chrono::steady_clock::now();            // 这里获取时间传入下面
+    result.decision_timestamp = decision_now;
     auto input = make_base_safety_input(decision_now, std::nullopt);      
     input.processing_ok = false;                                           // 设置input参数
     result.safety = safety_controller_.decide(input);                      // 传入处理并作为新的参数输入
@@ -59,11 +61,12 @@ RuntimeStepResult AutoAimRuntime::step()
   result.frame_read = true;
   result.frame = frame;                                                     // 依旧设参数
   const auto snapshot = transport_.state_snapshot();
+  result.feedback = snapshot;
   const auto state = snapshot ? std::optional<protocol::IncomingState>(snapshot->state) : std::nullopt;
   const auto state_timestamp = snapshot ? std::optional<std::chrono::steady_clock::time_point>(snapshot->timestamp) : std::nullopt;
-  const double bullet_speed = state.has_value()     // 获取弹速
-                                ? static_cast<double>(state->shoot.bullet_speed)
-                                : std::numeric_limits<double>::quiet_NaN();
+  const double bullet_speed = safety_controller_.config().fixed_bullet_speed_m_s.value_or(
+    state ? static_cast<double>(state->shoot.bullet_speed)
+          : std::numeric_limits<double>::quiet_NaN());
 
   try {
     if (frame.timeline_reset) pipeline_.reset();
@@ -77,13 +80,15 @@ RuntimeStepResult AutoAimRuntime::step()
     std::optional<cv::Matx33d> orientation;
     const bool realtime = frame_source_.type() == io::FrameSourceType::mvs_camera ||
                           frame_source_.type() == io::FrameSourceType::opencv_camera;
-    if (realtime && pipeline_.config().rotation.feedback_frame_confirmed) {
+    if ((realtime || pipeline_.config().follow_target) &&
+        pipeline_.config().rotation.feedback_frame_confirmed) {
       const auto pose_state = transport_.state_at(frame.timestamp,std::chrono::milliseconds(50));
       if (pose_state) {
         constexpr double to_rad = 3.14159265358979323846/180.0;
         const auto & gimbal = pose_state->state.gimbal;
         if (std::isfinite(gimbal.yaw) && std::isfinite(gimbal.pitch) && std::isfinite(gimbal.roll)) {
-          orientation = vision::gimbal_to_world(gimbal.yaw*to_rad,gimbal.pitch*to_rad,gimbal.roll*to_rad);
+          // 已确认同济约定：外部 pitch 向下为正，数学旋转函数 pitch 向上为正。
+          orientation = vision::gimbal_to_world(gimbal.yaw*to_rad,-gimbal.pitch*to_rad,gimbal.roll*to_rad);
         }
       }
     }
@@ -100,6 +105,7 @@ RuntimeStepResult AutoAimRuntime::step()
   // FrameSource 在 read() 内生成单调时间戳；决策时刻必须在 read() 之后
   // 获取，否则极快输入可能被误判为“来自未来”的帧。
   const auto decision_now = std::chrono::steady_clock::now();                           // 获取时间
+  result.decision_timestamp = decision_now;
   SafetyInput input = make_base_safety_input(decision_now, result.frame);               
   input.transport_state = state;
   input.transport_state_timestamp = state_timestamp;

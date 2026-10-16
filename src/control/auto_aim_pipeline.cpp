@@ -28,6 +28,33 @@ AutoAimFrameResult AutoAimPipeline::process(
   result.timestamp = timestamp;
   result.selection = target_selector_.select(
     detections, pose_solver_, timestamp, frame_sequence);
+  if (config_.follow_target) {
+    result.follow_target = true;
+    result.rotation.status = "non_firing_follow";
+    result.tracking = target_tracker_.update(result.selection, timestamp);
+    result.aim.bullet_speed_m_s = bullet_speed_m_s;
+    if (!rotation_gimbal_to_world) {
+      result.aim.error = "follow requires fresh confirmed gimbal feedback";
+      return result;
+    }
+    if (!result.tracking.current_observation) {
+      result.aim.error = "follow requires a current target observation";
+      return result;
+    }
+    const auto world = *rotation_gimbal_to_world *
+      result.tracking.current_observation->pose.translation_gimbal_m;
+    auto target = result.tracking;
+    target.predicted_yaw_rad = std::atan2(world[1], world[0]);
+    target.predicted_pitch_rad = std::atan2(world[2], std::hypot(world[0], world[1]));
+    target.predicted_range_m = cv::norm(world);
+    target.prediction_valid = true;
+    // 联调只跟随当前装甲，不把相机运动或旋转切甲产生的差分当作前馈。
+    target.yaw_velocity_rad_s = 0;
+    target.pitch_velocity_rad_s = 0;
+    target.range_velocity_m_s = 0;
+    result.aim = aim_compensator_.solve(target, bullet_speed_m_s);
+    return result;
+  }
   if (config_.rotation.enabled) {
     result.rotation = rotating_target_.update(result.selection,timestamp,rotation_gimbal_to_world);
     const auto & rotation = result.rotation;

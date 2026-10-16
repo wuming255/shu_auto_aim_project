@@ -109,7 +109,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     }
 
     const double transport_bullet_speed =
-      static_cast<double>(input.transport_state->shoot.bullet_speed);
+      config_.fixed_bullet_speed_m_s.value_or(input.transport_state->shoot.bullet_speed);
     transport_bullet_speed_valid =
       finite(transport_bullet_speed) &&
       transport_bullet_speed >= config_.min_bullet_speed_m_s &&
@@ -168,9 +168,19 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   const bool command_aim_valid = aim_valid || guard_hold_aim_valid;
 
   if (command_aim_valid) {
-    const float yaw = static_cast<float>(pipeline->aim.yaw_deg);
-    const float pitch = static_cast<float>(pipeline->aim.pitch_deg);
-    if (std::isfinite(yaw) && std::isfinite(pitch)) {
+    double yaw_deg = pipeline->aim.yaw_deg;
+    double pitch_deg = pipeline->aim.pitch_deg;
+    bool feedback_valid = true;
+    if (pipeline->follow_target) {
+      const auto & feedback = input.transport_state->gimbal;
+      feedback_valid = finite(feedback.yaw) && finite(feedback.pitch) && finite(feedback.roll);
+      // 同济参考输出绝对角，pitch 向下为正；yaw 保持反馈附近的连续周次。
+      yaw_deg = feedback.yaw + std::remainder(yaw_deg - feedback.yaw, 360.0);
+      pitch_deg = -pitch_deg;
+    }
+    const float yaw = static_cast<float>(yaw_deg);
+    const float pitch = static_cast<float>(pitch_deg);
+    if (feedback_valid && std::isfinite(yaw) && std::isfinite(pitch)) {
       output.command.gimbal = {yaw, pitch};
       output.aim_command_valid = true;
     } else {
@@ -225,6 +235,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     (pipeline->guard_target_visible && pipeline->fire_window_valid);
   const bool fire_gate =
     command_aim_valid && output.aim_command_valid && config_.allow_visual_fire &&
+    !config_.fixed_bullet_speed_m_s && !pipeline->follow_target &&
     input.visual_fire_intent && gimbal_settled && guard_fire_conditions;
   if (fire_gate) {
     output.command.fire.fire_flag = 1;
@@ -237,8 +248,14 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     } else {
       output.state = SafetyState::safe;
       output.command.gimbal = {};
+      if (pipeline && pipeline->follow_target && input.transport_state &&
+          transport_state_timestamp_valid && input.transport_connected &&
+          finite(input.transport_state->gimbal.yaw) && finite(input.transport_state->gimbal.pitch)) {
+        output.command.gimbal = {input.transport_state->gimbal.yaw, input.transport_state->gimbal.pitch};
+      }
     }
-    if (input.visual_fire_intent && !config_.allow_visual_fire) {
+    if (input.visual_fire_intent && (!config_.allow_visual_fire ||
+        config_.fixed_bullet_speed_m_s || (pipeline && pipeline->follow_target))) {
       add_reason(output, SafetyReason::fire_disabled);
     }
   }
@@ -279,6 +296,12 @@ void SafetyController::validate_config(const SafetyControllerConfig & config)
       !finite(config.max_bullet_speed_m_s) ||
       config.max_bullet_speed_m_s < config.min_bullet_speed_m_s) {
     throw std::invalid_argument("invalid safety bullet speed range");
+  }
+  if (config.fixed_bullet_speed_m_s &&
+      (!finite(*config.fixed_bullet_speed_m_s) ||
+       *config.fixed_bullet_speed_m_s < config.min_bullet_speed_m_s ||
+       *config.fixed_bullet_speed_m_s > config.max_bullet_speed_m_s)) {
+    throw std::invalid_argument("fixed bullet speed is outside configured range");
   }
   if (!finite(config.max_gimbal_error_deg) || config.max_gimbal_error_deg <= 0.0 ||
       config.min_gimbal_settle_time <= std::chrono::milliseconds::zero()) {

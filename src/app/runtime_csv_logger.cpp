@@ -102,7 +102,18 @@ void RuntimeCsvLogger::log(
   } else {
     for (int column = 0; column < 32; ++column) stream_ << ',';
   }
-  stream_ << '\n';
+  stream_ << ',' << result.safety.command.gimbal.yaw << ',' << result.safety.command.gimbal.pitch;
+  if (result.feedback) {
+    const auto & feedback = result.feedback->state;
+    stream_ << ',' << feedback.gimbal.yaw << ',' << feedback.gimbal.pitch << ',' << feedback.gimbal.roll
+            << ',' << feedback.shoot.bullet_speed << ',';
+    if (result.decision_timestamp) stream_ << std::chrono::duration<double,std::milli>(
+      *result.decision_timestamp - result.feedback->timestamp).count();
+  } else {
+    stream_ << ",,,,,";
+  }
+  stream_ << ',' << (result.bullet_speed_overridden ? "fixed" : "referee") << ','
+          << csv_field(result.pipeline ? result.pipeline->aim.error : "") << '\n';
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed while writing runtime log: " + path_);
   ++rows_written_;
@@ -168,7 +179,9 @@ void RuntimeCsvLogger::write_header()
              "rotation_center_x_m,rotation_center_y_m,rotation_center_z_m,rotation_radius_m,"
              "rotation_phase_rad,rotation_omega_rad_s,rotation_position_rms_m,rotation_phase_rms_rad,"
               "rotation_observation_age_s,rotation_associated_plate,guard_command_valid,"
-              "guard_target_visible,fire_window_valid,guard_phase_error_rad\n";
+               "guard_target_visible,fire_window_valid,guard_phase_error_rad,"
+               "command_yaw_deg,command_pitch_deg,feedback_yaw_deg,feedback_pitch_deg,feedback_roll_deg,"
+               "feedback_bullet_speed_m_s,feedback_age_ms,bullet_speed_source,aim_error\n";
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed to write runtime log header: " + path_);
 }

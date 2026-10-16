@@ -30,6 +30,9 @@ struct RuntimeStepResult               // 处理数据汇总struct
   std::optional<io::Frame> frame;
   std::optional<AutoAimFrameResult> pipeline;
   SafetyOutput safety;            // 安全判断结果
+  std::optional<io::TimedIncomingState> feedback;  // 原始反馈，弹速覆盖不改变此值。
+  std::optional<std::chrono::steady_clock::time_point> decision_timestamp;
+  bool bullet_speed_overridden = false;
 };
 
 class AutoAimRuntime final

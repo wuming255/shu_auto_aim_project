@@ -244,10 +244,37 @@ void test_rotation_pipeline_uses_current_association_and_resets()
   assert(!reset.tracking.last_observation && !reset.tracking.prediction_valid);
 }
 
+void test_follow_uses_current_observation_in_world_without_rotation_lock()
+{
+  auto config = make_pipeline_config();
+  config.follow_target = true;
+  config.rotation.enabled = true;
+  config.tracker.min_confirmed_updates = 1;
+  AutoAimPipeline pipeline(config);
+  const cv::Matx33d yaw90(0,-1,0, 1,0,0, 0,0,1);
+  const auto first = pipeline.process(
+    make_detection(config.pose_solver, 0, 0, false), TimePoint{}, 0, 22, yaw90);
+  assert(first.follow_target && first.aim.valid);
+  assert(!first.rotation.reliable && !first.guard_command_valid);
+  assert(std::abs(first.aim.yaw_deg - 90) < 0.001);
+  assert(first.aim.pitch_deg > 2.8 && first.aim.pitch_deg < 3.0);
+  // 云台移动产生的相对视线速度不能变成弹丸飞行时间前馈。
+  const auto moved = pipeline.process(make_detection(config.pose_solver, 0.04, 0, false),
+    TimePoint{} + std::chrono::milliseconds(40), 1, 22, yaw90);
+  assert(moved.aim.valid);
+  assert(std::abs(moved.aim.yaw_rad - (CV_PI/2 + 0.04)) < 0.0001);
+  const auto missing = pipeline.process({}, TimePoint{} + std::chrono::milliseconds(80), 2, 22, yaw90);
+  assert(!missing.aim.valid);
+  const auto no_feedback = pipeline.process(make_detection(config.pose_solver, 0, 0, false),
+    TimePoint{} + std::chrono::milliseconds(120), 3, 22);
+  assert(!no_feedback.aim.valid);
+}
+
 }  // namespace
 
 int main()
 {
+  test_follow_uses_current_observation_in_world_without_rotation_lock();
   test_complete_synthetic_sequence();
   test_bad_bullet_speed_does_not_break_tracking();
   test_reset_clears_cross_frame_state();

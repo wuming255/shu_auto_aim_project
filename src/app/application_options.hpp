@@ -28,6 +28,7 @@ struct ApplicationOptions
   vision::RotatingTargetConfig rotation;
   control::FixedGuardConfig fixed_guard;
   control::SafetyControllerConfig safety;
+  bool follow_target = false;
   std::optional<cv::Size2d> feature_size_m;  // 灯条端点矩形实测值；空值表示未确认。
   std::string config_path;
   std::string log_path;

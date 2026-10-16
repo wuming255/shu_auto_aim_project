@@ -107,11 +107,36 @@ void test_relocalization_and_ballistic_hit_window()
   assert(in_window.fire_window_valid);
 }
 
+void test_unavailable_model_preserves_input_bullet_speed()
+{
+  AimCompensator compensator;
+  const auto now = Clock::time_point{};
+  for (const double speed : {22.0, 0.0}) {
+    FixedGuardController guard;
+    RotationEstimate rotation;
+    const auto unavailable = guard.update(rotation, compensator, speed, now);
+    assert(!unavailable.aim.valid);
+    assert(unavailable.aim.bullet_speed_m_s == speed);
+
+    rotation.current_visible = true;
+    const auto unreliable = guard.update(rotation, compensator, speed, now);
+    assert(!unreliable.aim.valid);
+    assert(unreliable.aim.bullet_speed_m_s == speed);
+
+    rotation.current_visible = false;
+    rotation.observation_age_seconds = 0.3;
+    const auto lost = guard.update(rotation, compensator, speed, now);
+    assert(!lost.aim.valid);
+    assert(lost.aim.bullet_speed_m_s == speed);
+  }
+}
+
 }  // namespace
 
 int main()
 {
   test_lock_relocalize_hold_and_long_loss();
   test_relocalization_and_ballistic_hit_window();
+  test_unavailable_model_preserves_input_bullet_speed();
   return 0;
 }

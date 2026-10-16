@@ -69,6 +69,65 @@ void test_valid_aim_is_non_firing_by_default()
   assert(output.reasons.empty());
 }
 
+void test_uninitialized_rotation_does_not_fabricate_a_bad_bullet_speed()
+{
+  const auto now = Clock::now();
+  srm::control::AutoAimPipelineConfig config;
+  config.rotation.enabled = true;
+  srm::control::AutoAimPipeline pipeline(config);
+  for (const float speed : {22.0F, 0.0F}) {
+    AutoAimFrameResult result;
+    IncomingState feedback;
+    auto input = valid_input(result, feedback, now);
+    input.transport_state->shoot.bullet_speed = speed;
+    result = pipeline.process({}, now, 0, speed);
+    const auto output = SafetyController().decide(input);
+    assert(output.state == SafetyState::safe);
+    assert(!output.aim_command_valid);
+    assert(output.command.gimbal.yaw == 0.0F && output.command.gimbal.pitch == 0.0F);
+    assert(output.command.fire.fire_flag == 0);
+    assert(has_reason(output, SafetyReason::target_unavailable));
+    assert(has_reason(output, SafetyReason::aim_invalid));
+    assert(has_reason(output, SafetyReason::bullet_speed_invalid) == (speed == 0.0F));
+  }
+}
+
+void test_fixed_speed_and_tongji_follow_commands_never_fire()
+{
+  AutoAimFrameResult result;
+  IncomingState feedback;
+  const auto now = Clock::now();
+  auto input = valid_input(result, feedback, now);
+  result.follow_target = true;
+  result.aim.yaw_deg = -179;
+  result.aim.pitch_deg = 8;
+  result.aim.bullet_speed_m_s = 22;
+  input.transport_state->gimbal.yaw = 179;
+  input.transport_state->shoot.bullet_speed = 0;
+  input.visual_fire_intent = true;
+  SafetyControllerConfig config;
+  config.allow_visual_fire = true;
+  config.fixed_bullet_speed_m_s = 22;
+  const auto output = SafetyController(config).decide(input);
+  assert(output.aim_command_valid);
+  assert(std::abs(output.command.gimbal.yaw - 181) < 0.001);
+  assert(std::abs(output.command.gimbal.pitch + 8) < 0.001);
+  assert(output.command.fire.fire_flag == 0 && !output.fire_allowed);
+  assert(!has_reason(output, SafetyReason::bullet_speed_invalid));
+  config.fixed_bullet_speed_m_s.reset();
+  input.transport_state->shoot.bullet_speed = 22;
+  assert(SafetyController(config).decide(input).command.fire.fire_flag == 0);
+  result.follow_target = false;
+  config.fixed_bullet_speed_m_s = 22;
+  assert(SafetyController(config).decide(input).command.fire.fire_flag == 0);
+  input.transport_state_timestamp = now - std::chrono::seconds(1);
+  assert(!SafetyController(config).decide(input).aim_command_valid);
+  input.transport_state_timestamp = now;
+  result.follow_target = true;
+  input.transport_state->gimbal.yaw = std::numeric_limits<float>::quiet_NaN();
+  assert(!SafetyController(config).decide(input).aim_command_valid);
+}
+
 void test_explicit_visual_fire_gate_is_separate()
 {
   AutoAimFrameResult pipeline_result;
@@ -274,7 +333,9 @@ void test_gimbal_settling_and_visible_fire_window()
 
 int main()
 {
+  test_fixed_speed_and_tongji_follow_commands_never_fire();
   test_valid_aim_is_non_firing_by_default();
+  test_uninitialized_rotation_does_not_fabricate_a_bad_bullet_speed();
   test_explicit_visual_fire_gate_is_separate();
   test_transport_lifecycle_and_state_guards();
   test_frame_and_processing_guards();

@@ -23,6 +23,7 @@ struct AutoAimPipelineConfig
   AimCompensatorConfig aim_compensator;
   vision::RotatingTargetConfig rotation;
   FixedGuardConfig fixed_guard;
+  bool follow_target = false;  // 非开火联调：当前观测 + 反馈参考系，不等待旋转模型。
 };
 
 struct AutoAimFrameResult
@@ -38,6 +39,7 @@ struct AutoAimFrameResult
   bool guard_command_valid = false;
   bool guard_target_visible = false;
   bool fire_window_valid = false;
+  bool follow_target = false;  // aim 为世界系绝对角，数学 pitch 向上为正。
 };
 
 class AutoAimPipeline final

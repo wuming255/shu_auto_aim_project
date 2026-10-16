@@ -301,6 +301,28 @@ void test_classifier_and_rotation_options()
 }
 
 
+void test_follow_and_fixed_speed_options()
+{
+  const auto path = "/tmp/shu_follow_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream out(path);
+    out << "aim.follow_target=true\naim.fixed_bullet_speed_m_s=22\n"
+        << "rotation.feedback_frame_confirmed=true\n";
+  }
+  const auto configured = parse_dynamic({"--config",path});
+  assert(configured.follow_target && configured.safety.fixed_bullet_speed_m_s == 22);
+  const auto overridden = parse_dynamic({"--config",path,"--fixed-bullet-speed","referee","--no-follow-target"});
+  assert(!overridden.follow_target && !overridden.safety.fixed_bullet_speed_m_s);
+  assert(parse({"--follow-target","--fixed-bullet-speed","22"}).follow_target);
+  for (const auto * speed : {"nan","0","-1","101"}) {
+    bool rejected = false;
+    try { (void)parse_dynamic({"--fixed-bullet-speed",speed}); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+  ::unlink(path.c_str());
+}
+
 void test_config_file_and_cli_override()
 {
   const auto path =
@@ -440,6 +462,13 @@ void test_runtime_csv_logger()
   result.safety.command.gimbal = {12.0F, -2.0F};
   result.safety.reasons = {SafetyReason::fire_disabled};
   result.error = "comma,error";
+  result.feedback = srm::io::TimedIncomingState{};
+  // 最新反馈可在读图之后到达，年龄必须相对于决策时刻计算。
+  result.feedback->timestamp = frame.timestamp + std::chrono::milliseconds(1);
+  result.decision_timestamp = frame.timestamp + std::chrono::milliseconds(3);
+  result.feedback->state.gimbal = {350,-10,0,1,3};
+  result.feedback->state.shoot.bullet_speed = 0;
+  result.bullet_speed_overridden = true;
 
   const RuntimeTransportSnapshot transport{4, 5, 6};
   logger.log(result, transport);
@@ -459,6 +488,7 @@ void test_runtime_csv_logger()
   assert(text.find("error,motion_time_us,motion_time_source,timeline_reset,track_status,") != std::string::npos);
   assert(text.find("\"comma,error\",250000,video_nominal_fps,0,tracking_four_plates,1,2,0.875,10,20,30,20,30,40,10,40,") != std::string::npos);
   assert(text.find(",tracking_four_plates,1,1,1,") != std::string::npos);
+  assert(text.find(",12,-2,350,-10,0,0,2,fixed,\n") != std::string::npos);
 
   RuntimeCsvLogger disabled;
   disabled.log(result);
@@ -529,7 +559,7 @@ void test_runtime_csv_missing_values()
   const auto failure_fields = read_fields();
   const auto restart_fields = read_fields();
   const auto host_fields = read_fields();
-  assert(header.size() == 56);
+  assert(header.size() == 65);
   assert(eof_fields.size() == header.size());
   assert(failure_fields.size() == header.size());
   assert(restart_fields.size() == header.size());
@@ -556,7 +586,7 @@ void test_runtime_csv_missing_values()
   assert(host_fields[24] == "no_observation");
   for (std::size_t index = 25; index <= 35; ++index) assert(host_fields[index].empty());
   for (std::size_t index = 42; index <= 49; ++index) assert(host_fields[index].empty());
-  for (std::size_t index = 24; index < header.size(); ++index) {
+  for (std::size_t index = 24; index < 56; ++index) {
     assert(eof_fields[index].empty() && failure_fields[index].empty());
   }
   ::unlink(path.c_str());
@@ -660,6 +690,7 @@ int main()
   test_center_pattern_options();
   test_classifier_and_rotation_options();
   test_config_file_and_cli_override();
+  test_follow_and_fixed_speed_options();
   test_runtime_csv_logger();
   test_runtime_csv_missing_values();
   test_tracking_drawing_uses_current_association();

@@ -53,6 +53,8 @@ struct SafetyControllerConfig
   // 仅用于安全门检查；实际数学补偿仍由 AimCompensator 配置控制。
   double min_bullet_speed_m_s = 1.0;
   double max_bullet_speed_m_s = 100.0;
+  // 临时非开火联调覆盖；同一值用于 runtime 解算和本安全门，原始反馈不改写。
+  std::optional<double> fixed_bullet_speed_m_s;
 
   // 默认关闭视觉开火。即使打开，也仍需调用方显式提供 visual_fire_intent。
   bool allow_visual_fire = false;

@@ -1,8 +1,5 @@
 %YAML:1.0
 ---
-# REFERENCE ONLY: adapted from sp_vision_25-main/configs/mvs.yaml.
-# These values are not calibrated or verified for the current gimbal installation.
-# Do not use this file for live gimbal control until its R/t are independently checked.
 schema_version: 1
 image_width: 1440
 image_height: 1080

@@ -53,6 +53,7 @@ srm::control::AutoAimPipelineConfig make_pipeline_config(
   srm::control::AutoAimPipelineConfig config;
   config.rotation = options.rotation;
   config.fixed_guard = options.fixed_guard;
+  config.follow_target = options.follow_target;
   config.pose_solver.feature_size_m = options.feature_size_m;
   if (options.intrinsics_set) {
     config.pose_solver.camera_matrix = cv::Matx33d(
@@ -145,6 +146,13 @@ int main(int argc, const char * const argv[])
     if (!options.dry_run && (!calibration || options.extrinsics_path.empty())) {
       throw std::invalid_argument("--live requires full --calibration and --extrinsics; use --dry-run for uncalibrated input checks");
     }
+    if (!options.dry_run && options.follow_target && !options.rotation.feedback_frame_confirmed) {
+      throw std::invalid_argument("live follow requires rotation.feedback_frame_confirmed=true (Tongji yaw/roll right-hand, pitch down positive)");
+    }
+    std::cerr << "aim_mode=" << (options.follow_target ? "non_firing_follow" : "configured_pipeline")
+              << " bullet_speed_source=" << (options.safety.fixed_bullet_speed_m_s ? "fixed" : "referee");
+    if (options.safety.fixed_bullet_speed_m_s) std::cerr << " bullet_speed_m_s=" << *options.safety.fixed_bullet_speed_m_s;
+    std::cerr << '\n';
     if (!options.intrinsics_set && !calibration) {
       std::cerr
         << "warning: camera intrinsics are not configured; use --intrinsics fx,fy,cx,cy "
