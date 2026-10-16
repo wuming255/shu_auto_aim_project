@@ -1,9 +1,10 @@
 /build/
 /sp_vision_25-main/
+/chenjun_rm_auto_aim-main/
+/FaterYU_rm_auto_aim-main/
 /replay_debug/
 /temporary_file/
-# 标定原始录像较大；标定 YAML 和说明仍可跟踪。
-/calibration/**/*.avi
+/calibration/
 *.log
 *.o
 *.a

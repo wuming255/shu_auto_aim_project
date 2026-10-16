@@ -56,7 +56,49 @@ void RuntimeCsvLogger::log(
           << (result.safety.fire_allowed ? 1 : 0) << ','
           << result.safety.command.fire.fire_flag << ','
           << csv_field(join_reasons(result.safety)) << ','
-          << csv_field(result.error) << '\n';
+          << csv_field(result.error) << ',';
+  if (result.frame) {
+    const auto & frame = *result.frame;
+    if (frame.motion_timestamp) {
+      stream_ << std::chrono::duration_cast<std::chrono::microseconds>(
+        frame.motion_timestamp->time_since_epoch()).count();
+    }
+    stream_ << ',' << csv_field(frame.motion_time_source ? frame.motion_time_source : "")
+            << ',' << (frame.timeline_reset ? 1 : 0);
+  } else {
+    stream_ << ",,";
+  }
+  if (result.pipeline) {
+    const auto & pipeline = *result.pipeline;
+    const auto & track = pipeline.tracking;
+    stream_ << ',' << csv_field(track.status);
+    if (track.has_current_measurement && track.current_observation) {
+      const auto & observation = *track.current_observation;
+      stream_ << ',' << observation.detection_index
+              << ',' << csv_field(observation.armor.classification.label)
+              << ',' << observation.armor.classification.confidence;
+      for (const auto & point : observation.armor.points) stream_ << ',' << point.x << ',' << point.y;
+    } else {
+      for (int column = 0; column < 11; ++column) stream_ << ',';
+    }
+    const auto & rotation = pipeline.rotation;
+    stream_ << ',' << csv_field(rotation.status) << ',' << rotation.initialized
+            << ',' << rotation.reliable << ',' << rotation.prediction_valid
+            << ',' << rotation.stable_frame_valid << ',' << rotation.pose_ambiguous;
+    if (rotation.initialized) {
+      stream_ << ',' << rotation.center_world_m[0] << ',' << rotation.center_world_m[1]
+              << ',' << rotation.center_world_m[2] << ',' << rotation.radius_m
+              << ',' << rotation.phase_rad << ',' << rotation.angular_velocity_rad_s
+              << ',' << rotation.position_rms_m << ',' << rotation.phase_rms_rad;
+    } else {
+      for (int column = 0; column < 8; ++column) stream_ << ',';
+    }
+    stream_ << ',' << rotation.observation_age_seconds << ',';
+    if (rotation.initialized || rotation.current_visible) stream_ << rotation.associated_plate;
+  } else {
+    for (int column = 0; column < 28; ++column) stream_ << ',';
+  }
+  stream_ << '\n';
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed while writing runtime log: " + path_);
   ++rows_written_;
@@ -113,7 +155,15 @@ void RuntimeCsvLogger::write_header()
              "step_duration_us,transport_sent_frame_count,transport_received_frame_count,"
              "transport_communication_error_count,candidate_count,track_state,aim_valid,yaw_deg,"
              "pitch_deg,bullet_speed_m_s,safety_state,aim_command_valid,fire_allowed,fire_flag,"
-             "safety_reasons,error\n";
+             "safety_reasons,error,motion_time_us,motion_time_source,timeline_reset,"
+             "track_status,current_detection_index,current_label,current_confidence,"
+             "current_tl_x,current_tl_y,current_tr_x,current_tr_y,"
+             "current_br_x,current_br_y,current_bl_x,current_bl_y,"
+             "rotation_status,rotation_initialized,rotation_reliable,rotation_prediction_valid,"
+             "rotation_stable_frame,rotation_pose_ambiguous,"
+             "rotation_center_x_m,rotation_center_y_m,rotation_center_z_m,rotation_radius_m,"
+             "rotation_phase_rad,rotation_omega_rad_s,rotation_position_rms_m,rotation_phase_rms_rad,"
+             "rotation_observation_age_s,rotation_associated_plate\n";
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed to write runtime log header: " + path_);
 }

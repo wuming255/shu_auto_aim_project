@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <deque>
 
 #include "protocol/self_aim_protocol.hpp"
 #include "serial/serial.h"
@@ -34,6 +35,12 @@ struct TransportConfig
 
   // 设备未连接或通信异常后的重连间隔。
   std::chrono::milliseconds reconnect_interval{100};
+};
+
+struct TimedIncomingState
+{
+  protocol::IncomingState state;
+  std::chrono::steady_clock::time_point timestamp;
 };
 
 class SelfAimTransport final
@@ -65,6 +72,10 @@ public:
   std::optional<protocol::IncomingState> latest_state() const;
   // 最近一次完整状态帧被解析到的单调时间；没有收到过完整帧时返回空。
   std::optional<std::chrono::steady_clock::time_point> latest_state_timestamp() const;
+  std::optional<TimedIncomingState> state_snapshot() const;
+  // 返回观测时刻之前最近的完整帧；不拿未来反馈或过期姿态补齐观测。
+  std::optional<TimedIncomingState> state_at(std::chrono::steady_clock::time_point time,
+    std::chrono::milliseconds max_age) const;
   std::uint64_t sent_frame_count() const noexcept;
   std::uint64_t received_frame_count() const noexcept;
   std::uint64_t communication_error_count() const noexcept;
@@ -99,6 +110,7 @@ private:
   mutable std::mutex state_mutex_;
   std::optional<protocol::IncomingState> latest_state_;
   std::optional<std::chrono::steady_clock::time_point> latest_state_timestamp_;
+  std::deque<TimedIncomingState> state_history_;
   std::string last_error_;
 
   std::atomic<std::uint64_t> sent_frame_count_{0};

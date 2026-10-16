@@ -8,9 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(SRM_ENABLE_GUI "Build optional debug windows when OpenCV HighGUI is available" ON)
 if(SRM_ENABLE_GUI)
-  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d OPTIONAL_COMPONENTS highgui)
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d dnn OPTIONAL_COMPONENTS highgui)
 else()
-  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs videoio calib3d)
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d dnn)
 endif()
 
 # 算法和输入库只链接基础组件，HighGUI 仅由应用窗口使用。
@@ -89,6 +89,7 @@ target_compile_options(srm_frame_source PRIVATE
 
 add_library(srm_traditional_detector STATIC
   src/vision/traditional_detector.cpp
+  src/vision/number_classifier.cpp
 )
 
 target_include_directories(srm_traditional_detector
@@ -141,6 +142,7 @@ target_compile_options(srm_target_selector PRIVATE
 
 add_library(srm_target_tracker STATIC
   src/vision/target_tracker.cpp
+  src/vision/rotating_target.cpp
 )
 
 target_include_directories(srm_target_tracker
@@ -261,7 +263,10 @@ add_library(srm_app_support STATIC
   src/app/application_options.cpp
   src/app/runtime_csv_logger.cpp
   src/app/runtime_statistics.cpp
+  src/app/tracking_debug.cpp
 )
+target_compile_definitions(srm_app_support PRIVATE
+  SRM_DEFAULT_NUMBER_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models/armor_number")
 
 add_library(srm_camera_calibration STATIC src/vision/camera_calibration.cpp)
 target_include_directories(srm_camera_calibration PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${OpenCV_INCLUDE_DIRS})
@@ -313,6 +318,9 @@ target_compile_options(srm_auto_aim_app PRIVATE
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(srm_rotating_target_test tests/rotating_target_test.cpp)
+  target_link_libraries(srm_rotating_target_test PRIVATE srm_target_tracker)
+  add_test(NAME srm_rotating_target_test COMMAND srm_rotating_target_test)
   add_executable(srm_terminal_quit_test tests/terminal_quit_test.cpp)
   target_link_libraries(srm_terminal_quit_test PRIVATE srm_app_support util)
   add_test(NAME srm_terminal_quit_test COMMAND srm_terminal_quit_test)
@@ -385,6 +393,8 @@ if(BUILD_TESTING)
     tests/traditional_detector_test.cpp
   )
   target_link_libraries(srm_traditional_detector_test PRIVATE srm_traditional_detector)
+  target_compile_definitions(srm_traditional_detector_test PRIVATE
+    SRM_TEST_NUMBER_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models/armor_number")
   target_compile_options(srm_traditional_detector_test PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )

@@ -190,11 +190,11 @@ cv::Vec3d gimbal_position(double yaw, double pitch, double range)
     horizontal * std::cos(yaw), horizontal * std::sin(yaw), range * std::sin(pitch)};
 }
 
-ArmorObservation make_armor(const PoseSolverConfig & config)
+ArmorObservation make_armor(const PoseSolverConfig & config, double yaw = 0.12)
 {
   const auto object_points = ArmorPoseSolver::object_points();
   const std::vector<cv::Point3f> object_vector(object_points.begin(), object_points.end());
-  const cv::Vec3d target = gimbal_position(0.12, 0.0, 5.0);
+  const cv::Vec3d target = gimbal_position(yaw, 0.0, 5.0);
   const cv::Vec3d camera_translation = config.rotation_camera_to_gimbal.t() * target;
 
   std::vector<cv::Point2f> projected;
@@ -375,11 +375,55 @@ void test_runtime_end_of_stream_is_safe_and_stops_transport()
   ::unlink(image_path.c_str());
 }
 
+void test_video_motion_time_does_not_follow_processing_delay()
+{
+  const auto path = std::string("/tmp/shu_auto_aim_motion_time_") +
+    std::to_string(static_cast<long long>(::getpid())) + ".avi";
+  cv::VideoWriter writer(path, cv::VideoWriter::fourcc('M','J','P','G'), 20.0, {32, 24});
+  assert(writer.isOpened());
+  for (int i = 0; i < 3; ++i) writer.write(cv::Mat(24, 32, CV_8UC3, cv::Scalar(0,0,0)));
+  writer.release();
+  FrameSourceConfig config;
+  config.type = FrameSourceType::video_file;
+  config.uri = path;
+  config.loop = true;
+  FrameSource source(config);
+  SelfAimTransport transport(make_transport_config("/nonexistent/offline"));
+  AutoAimRuntime runtime(source, transport,
+    srm::control::AutoAimPipeline(make_pipeline_config()), SafetyController(),
+    [](const Frame & frame) {
+      DetectionResult result;
+      result.armors.push_back(make_armor(make_pose_config(), 0.12 + 0.01*(frame.sequence%3)));
+      return result;
+    });
+  const auto first = runtime.step();
+  std::this_thread::sleep_for(300ms);  // 超过跟踪器允许间隔，模拟暂停。
+  const auto second = runtime.step();
+  assert(first.pipeline && second.pipeline);
+  const double dt = std::chrono::duration<double>(
+    second.pipeline->timestamp - first.pipeline->timestamp).count();
+  assert(std::abs(dt - 0.05) < 1e-6);
+  assert(!second.pipeline->tracking.reset_due_to_time_gap);
+  assert(second.pipeline->tracking.has_current_measurement);
+  assert(second.pipeline->tracking.velocity_valid);
+  assert(std::abs(second.pipeline->tracking.yaw_velocity_rad_s - 0.2) < 0.001);
+  assert(second.frame->timestamp > first.frame->timestamp + 250ms);
+  (void)runtime.step();
+  const auto looped = runtime.step();
+  assert(looped.pipeline && looped.frame->sequence == 3);
+  assert(looped.frame->timeline_reset);
+  assert(looped.pipeline->tracking.confirmed_updates == 1);
+  assert(!looped.pipeline->tracking.velocity_valid);
+  assert(looped.safety.command.fire.fire_flag == 0);
+  ::unlink(path.c_str());
+}
+
 }  // namespace
 
 int main()
 {
   test_runtime_closed_loop_and_safety_fallback();
   test_runtime_end_of_stream_is_safe_and_stops_transport();
+  test_video_motion_time_does_not_follow_processing_delay();
   return 0;
 }

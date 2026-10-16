@@ -57,9 +57,12 @@ struct Frame
   std::chrono::steady_clock::time_point timestamp;      // 读取到时的帧时间戳
   std::uint64_t sequence = 0;             // 帧序号
 
-  // 文件输入的源时间，单位为秒；没有可用源时间时为 0。
+  // 源时间与主机读取时间分离；首帧的 0 秒是有效观测时刻。
   double source_time_seconds = 0.0;     // 这一帧在源文件中的时间位置，单位为秒
   int orientation_deg = 0;  // Delivered pixels, clockwise relative to native sensor pixels.
+  std::optional<std::chrono::steady_clock::time_point> motion_timestamp;
+  const char * motion_time_source = "host_arrival";
+  bool timeline_reset = false;
 };
 
 // 图片、视频、OpenCV camera index 和可选的海康 MVS 输入共用帧接口。
@@ -111,6 +114,9 @@ private:
   std::chrono::steady_clock::time_point last_timestamp_{};      // 上一帧的时间戳
   double nominal_fps_ = 0.0;                // 输入源的名义帧率，文件输入时是文件的帧率，相机输入时是配置的帧率
   std::optional<ImageGeometry> stored_geometry_;
+  std::uint64_t source_frame_index_ = 0;
+  std::optional<double> last_source_time_;
+  bool timeline_reset_pending_ = false;
 };
 
 }  // namespace srm::io

@@ -58,21 +58,37 @@ RuntimeStepResult AutoAimRuntime::step()
 
   result.frame_read = true;
   result.frame = frame;                                                     // 依旧设参数
-  const auto state = transport_.latest_state();
-  const auto state_timestamp = transport_.latest_state_timestamp();         // 获取时间戳
+  const auto snapshot = transport_.state_snapshot();
+  const auto state = snapshot ? std::optional<protocol::IncomingState>(snapshot->state) : std::nullopt;
+  const auto state_timestamp = snapshot ? std::optional<std::chrono::steady_clock::time_point>(snapshot->timestamp) : std::nullopt;
   const double bullet_speed = state.has_value()     // 获取弹速
                                 ? static_cast<double>(state->shoot.bullet_speed)
                                 : std::numeric_limits<double>::quiet_NaN();
 
   try {
+    if (frame.timeline_reset) pipeline_.reset();
+    if (!frame.motion_timestamp) throw std::runtime_error("frame has no valid motion timestamp");
     vision::DetectionResult detections;
     {
       DurationTimer timer{result.detection_duration};
       detections = detector_(frame);
     }
     DurationTimer timer{result.pipeline_duration};
+    std::optional<cv::Matx33d> orientation;
+    const bool realtime = frame_source_.type() == io::FrameSourceType::mvs_camera ||
+                          frame_source_.type() == io::FrameSourceType::opencv_camera;
+    if (realtime && pipeline_.config().rotation.feedback_frame_confirmed) {
+      const auto pose_state = transport_.state_at(frame.timestamp,std::chrono::milliseconds(50));
+      if (pose_state) {
+        constexpr double to_rad = 3.14159265358979323846/180.0;
+        const auto & gimbal = pose_state->state.gimbal;
+        if (std::isfinite(gimbal.yaw) && std::isfinite(gimbal.pitch) && std::isfinite(gimbal.roll)) {
+          orientation = vision::gimbal_to_world(gimbal.yaw*to_rad,gimbal.pitch*to_rad,gimbal.roll*to_rad);
+        }
+      }
+    }
     result.pipeline = pipeline_.process(                                    // 尝试加载处理
-      detections, frame.timestamp, frame.sequence, bullet_speed);
+      detections, *frame.motion_timestamp, frame.sequence, bullet_speed,orientation);
   } catch (const std::exception & error) {
     result.error = error.what();
     pipeline_.reset();
@@ -138,8 +154,11 @@ SafetyInput AutoAimRuntime::make_base_safety_input(           // 设置安全控
   if (frame.has_value()) input.frame_timestamp = frame->timestamp;
   input.transport_running = transport_.running();
   input.transport_connected = transport_.connected();
-  input.transport_state = transport_.latest_state();
-  input.transport_state_timestamp = transport_.latest_state_timestamp();
+  const auto snapshot = transport_.state_snapshot();
+  if (snapshot) {
+    input.transport_state = snapshot->state;
+    input.transport_state_timestamp = snapshot->timestamp;
+  }
   return input;
 }
 

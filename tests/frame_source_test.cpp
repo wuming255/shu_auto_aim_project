@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -96,6 +97,48 @@ void test_compatibility_read(const std::string & path)
   assert(timestamp != std::chrono::steady_clock::time_point{});
 }
 
+void test_video_source_clock_and_loop(const std::string & image_path)
+{
+  const auto path = image_path + ".avi";
+  cv::VideoWriter writer(path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 20.0, {32, 24});
+  assert(writer.isOpened());
+  for (int i = 0; i < 3; ++i) writer.write(cv::Mat(24, 32, CV_8UC3, cv::Scalar(i*40, 0, 0)));
+  writer.release();
+
+  {
+    FrameSourceConfig config{FrameSourceType::video_file, path};
+    config.loop = true;
+    FrameSource source(config);
+    Frame first, second, third, wrapped, next;
+    assert(source.read(first));
+    assert(first.motion_timestamp.has_value());
+    assert(first.motion_timestamp.value() == std::chrono::steady_clock::time_point{});
+    assert(!first.timeline_reset);
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    assert(source.read(second));
+    assert(second.motion_timestamp.has_value());
+    const double dt = std::chrono::duration<double>(*second.motion_timestamp-*first.motion_timestamp).count();
+    assert(std::abs(dt-0.05) < 1e-6);
+    assert(second.timestamp-first.timestamp >= std::chrono::milliseconds(100));
+    assert(std::string(second.motion_time_source) == "video_nominal_fps");
+    assert(source.read(third));
+    assert(source.read(wrapped));
+    assert(wrapped.sequence == 3 && wrapped.timeline_reset);
+    assert(wrapped.motion_timestamp == first.motion_timestamp);
+    assert(wrapped.timestamp > third.timestamp);
+    assert(source.read(next));
+    assert(!next.timeline_reset && next.motion_timestamp == second.motion_timestamp);
+
+    source.reset();
+    assert(source.read(wrapped));
+    assert(wrapped.sequence == 0 && wrapped.timeline_reset);
+    assert(wrapped.motion_timestamp == first.motion_timestamp);
+    assert(source.read(next));
+    assert(!next.timeline_reset && next.motion_timestamp == second.motion_timestamp);
+  }
+  std::remove(path.c_str());
+}
+
 void test_invalid_configuration(const std::string & path)
 {
   bool empty_uri_threw = false;
@@ -158,6 +201,7 @@ int main()
   test_image_source_and_reset(path);
   test_looping_image_source(path);
   test_compatibility_read(path);
+  test_video_source_clock_and_loop(path);
   test_invalid_configuration(path);
   test_mvs_unavailable();
 

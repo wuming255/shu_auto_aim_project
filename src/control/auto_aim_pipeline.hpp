@@ -8,6 +8,7 @@
 #include "vision/pose_solver.hpp"
 #include "vision/target_selector.hpp"
 #include "vision/target_tracker.hpp"
+#include "vision/rotating_target.hpp"
 
 namespace srm::control
 {
@@ -19,6 +20,7 @@ struct AutoAimPipelineConfig
   vision::TargetSelectorConfig target_selector;
   vision::TargetTrackerConfig tracker;
   AimCompensatorConfig aim_compensator;
+  vision::RotatingTargetConfig rotation;
 };
 
 struct AutoAimFrameResult
@@ -29,6 +31,7 @@ struct AutoAimFrameResult
   vision::TargetSelection selection;
   vision::TargetTrackEstimate tracking;
   AimSolution aim;
+  vision::RotationEstimate rotation;
 };
 
 class AutoAimPipeline final
@@ -41,7 +44,8 @@ public:
   AutoAimFrameResult process(
     const vision::DetectionResult & detections,
     std::chrono::steady_clock::time_point timestamp,
-    std::uint64_t frame_sequence, double bullet_speed_m_s);
+    std::uint64_t frame_sequence, double bullet_speed_m_s,
+    std::optional<cv::Matx33d> rotation_gimbal_to_world = std::nullopt);
 
   void reset() noexcept;
 
@@ -57,6 +61,8 @@ private:
   vision::TargetSelector target_selector_;
   vision::TargetTracker target_tracker_;
   AimCompensator aim_compensator_;
+  vision::RotatingTarget rotating_target_;
+  std::optional<vision::TargetObservation> rotation_last_observation_;
 };
 
 }  // namespace srm::control

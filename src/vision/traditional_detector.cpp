@@ -5,6 +5,8 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <functional>
+#include <set>
 
 // 本轮灯条筛选、跨灯排除和中央图案提取适配自 rm_auto_aim 参考实现。
 // Copyright (c) 2022 ChenJun
@@ -90,6 +92,7 @@ TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : con
 
   max_lightbar_angle_error_rad_ = config_.max_lightbar_angle_error_deg * kPi / 180.0;   // 灯条和竖向差角的最大值，弧度表示
   max_rectangular_error_rad_ = config_.max_rectangular_error_deg * kPi / 180.0;         // 灯条和横向差角的最大值，弧度表示
+  if (config_.classifier.enabled) classifier_.emplace(config_.classifier);
 }
 
 
@@ -172,14 +175,79 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
 
       if (!valid_armor(armor)) continue;                  // 这里面写了对方向角的要求
       if (contains_light(armor, result.lightbars)) continue;
-      if (config_.require_center_pattern && !valid_center_pattern(bgr_image, armor)) continue;
+      // 分类器直接处理几何候选，不能先被旧亮图案阈值排除。
+      if (!classifier_ && config_.require_center_pattern && !valid_center_pattern(bgr_image, armor)) continue;
       armor.roi = make_roi(armor, bgr_image.size());      // 装甲板合格就生成关注区域
       if (armor.roi.empty()) continue;
+      if (classifier_) {
+        armor.classification = classifier_->classify(bgr_image, armor);
+        if (!armor.classification.rejection.empty()) {
+          result.rejected_armors.push_back(std::move(armor));
+          continue;
+        }
+      }
       result.armors.push_back(std::move(armor));        // 成功生成关注区域后加入装甲板列表
     }
   }
 
+  if (classifier_) resolve_shared_light_conflicts(result, config_.classifier.conflict_margin);
   return result;
+}
+
+void resolve_shared_light_conflicts(DetectionResult & result, double margin)
+{
+  if (!std::isfinite(margin) || margin < 0 || margin > 1) {
+    throw std::invalid_argument("invalid shared light confidence margin");
+  }
+    // 共享灯条候选按连通分量求最大总置信度的互斥配对，保留多个独立装甲。
+    // 近似等分的冲突整组拒绝；大分量限额防止噪声触发指数搜索。
+    const auto shares = [](const ArmorObservation & a, const ArmorObservation & b) {
+      return a.left.id == b.left.id || a.left.id == b.right.id ||
+             a.right.id == b.left.id || a.right.id == b.right.id;
+    };
+    std::vector<bool> visited(result.armors.size(), false), keep(result.armors.size(), false);
+    for (std::size_t start = 0; start < result.armors.size(); ++start) {
+      if (visited[start]) continue;
+      std::vector<std::size_t> component{start};
+      visited[start] = true;
+      for (std::size_t i = 0; i < component.size(); ++i) {
+        for (std::size_t j = 0; j < result.armors.size(); ++j) {
+          if (!visited[j] && shares(result.armors[component[i]], result.armors[j])) {
+            visited[j] = true; component.push_back(j);
+          }
+        }
+      }
+      if (component.size() == 1) { keep[start] = true; continue; }
+      double best = -1, second = -1;
+      std::vector<std::size_t> chosen, winner;
+      std::set<std::size_t> used;
+      std::function<void(std::size_t, double)> search = [&](std::size_t i, double score) {
+        if (i == component.size()) {
+          if (score > best) { second = best; best = score; winner = chosen; }
+          else second = std::max(second, score);
+          return;
+        }
+        search(i+1, score);
+        const auto index = component[i];
+        const auto & a = result.armors[index];
+        if (used.count(a.left.id) || used.count(a.right.id)) return;
+        used.insert(a.left.id); used.insert(a.right.id); chosen.push_back(index);
+        search(i+1, score+a.classification.confidence);
+        chosen.pop_back(); used.erase(a.left.id); used.erase(a.right.id);
+      };
+      if (component.size() <= 18) search(0,0);
+       const bool ambiguous = best < 0 || best-second <= margin;
+      if (!ambiguous) for (const auto index : winner) keep[index] = true;
+      for (const auto index : component) if (!keep[index]) {
+        result.armors[index].classification.rejection = ambiguous ? "ambiguous_shared_light" : "shared_light";
+      }
+    }
+    std::vector<ArmorObservation> accepted;
+    for (std::size_t i = 0; i < result.armors.size(); ++i) {
+      if (keep[i]) accepted.push_back(std::move(result.armors[i]));
+      else result.rejected_armors.push_back(std::move(result.armors[i]));
+    }
+    result.armors = std::move(accepted);
 }
 
 
@@ -206,6 +274,9 @@ cv::Mat TraditionalDetector::draw_debug(
       armor.points[0], armor.points[1], armor.points[2], armor.points[3]};
     cv::polylines(drawing, points, true, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);        // 画装甲板矩形
     cv::rectangle(drawing, armor.roi, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);         // 画注意区矩形
+    if (!armor.classification.label.empty()) cv::putText(drawing,
+      armor.classification.label + " " + std::to_string(armor.classification.confidence).substr(0,4),
+      armor.center, cv::FONT_HERSHEY_SIMPLEX, 0.5, {0,255,0}, 1, cv::LINE_AA);
   }
   return drawing;
 }

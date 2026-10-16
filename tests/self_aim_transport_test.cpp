@@ -205,6 +205,25 @@ void test_pty_round_trip_and_safe_default()
   const auto state_timestamp = transport.latest_state_timestamp();
   assert(state_timestamp.has_value());
   assert(std::chrono::steady_clock::now() >= state_timestamp.value());
+  const auto snapshot = transport.state_snapshot();
+  assert(snapshot && snapshot->timestamp == *state_timestamp);
+  assert_state(snapshot->state);
+  assert(!transport.state_at(*state_timestamp-1ns,50ms)); // 不借用观测时刻之后的反馈。
+  assert(transport.state_at(*state_timestamp,0ms));
+  assert(transport.state_at(*state_timestamp+50ms,50ms));
+  assert(!transport.state_at(*state_timestamp+51ms,50ms));
+  auto second = incoming;
+  write_f32(second,4,12.5F);
+  pty.write_all(second);
+  const auto second_deadline = std::chrono::steady_clock::now()+1s;
+  while (transport.received_frame_count() < 2 && std::chrono::steady_clock::now() < second_deadline) {
+    std::this_thread::sleep_for(2ms);
+  }
+  assert(transport.received_frame_count() == 2);
+  const auto newest = transport.state_snapshot();
+  assert(newest && newest->state.gimbal.yaw == 12.5F);
+  const auto historical = transport.state_at(snapshot->timestamp,50ms);
+  assert(historical && historical->state.gimbal.yaw == 1.25F);
 
   transport.stop();
   assert(!transport.running());

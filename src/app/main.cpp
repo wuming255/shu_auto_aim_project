@@ -3,6 +3,7 @@
 #include "app/runtime_csv_logger.hpp"
 #include "app/runtime_statistics.hpp"
 #include "app/video_recorder.hpp"
+#include "app/tracking_debug.hpp"
 #include "control/auto_aim_pipeline.hpp"
 #include "control/auto_aim_runtime.hpp"
 #include "control/safety_controller.hpp"
@@ -50,6 +51,8 @@ srm::control::AutoAimPipelineConfig make_pipeline_config(
   const std::optional<srm::vision::CameraCalibration> & calibration)
 {
   srm::control::AutoAimPipelineConfig config;
+  config.rotation = options.rotation;
+  config.pose_solver.feature_size_m = options.feature_size_m;
   if (options.intrinsics_set) {
     config.pose_solver.camera_matrix = cv::Matx33d(
       options.fx, 0.0, options.cx, 0.0, options.fy, options.cy, 0.0, 0.0, 1.0); // 创建标准内参矩阵
@@ -172,6 +175,7 @@ int main(int argc, const char * const argv[])
     srm::io::SelfAimTransport transport(options.transport);           // 串口通信模块
     srm::vision::TraditionalDetectorConfig detector_config;
     detector_config.require_center_pattern = options.require_center_pattern;
+    detector_config.classifier = options.classifier;
     srm::vision::TraditionalDetector detector(detector_config);       // 传统视觉检测模块
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
     srm::app::RuntimeStatistics statistics;                           // 运行统计模块，记录各个功能运行了多少次，有什么报错，运行了多久等信息
@@ -249,6 +253,7 @@ int main(int argc, const char * const argv[])
             cv::Mat drawing;
             timed(srm::app::TimingStage::debug_draw, [&] {
               drawing = last_detection.has_value() ? detector.draw_debug(frame.bgr, last_detection.value()) : frame.bgr;
+              if (result.pipeline) drawing = srm::app::draw_tracking_debug(drawing,*result.pipeline,pipeline_config.pose_solver);
             });
             if (save_debug) timed(srm::app::TimingStage::debug_save, [&] { save_debug_frame(options.debug_directory, frame, drawing); });
             if (debug_viewer.has_value()) {

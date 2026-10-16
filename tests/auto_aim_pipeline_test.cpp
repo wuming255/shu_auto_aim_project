@@ -193,6 +193,54 @@ void test_reset_clears_cross_frame_state()
   assert(!result.aim.valid);
 }
 
+void test_rotation_pipeline_uses_current_association_and_resets()
+{
+  auto config = make_pipeline_config();
+  config.pose_solver.camera_matrix = {1800,0,720, 0,1800,540, 0,0,1};
+  config.pose_solver.feature_size_m = cv::Size2d(0.135,0.055);
+  config.rotation.enabled = true;
+  config.rotation.assume_static_camera = true;
+  config.rotation.mounting_tilt_rad = 0.25;
+  config.rotation.max_angular_speed_rad_s = 10;
+  AutoAimPipeline pipeline(config);
+  srm::control::AutoAimFrameResult result;
+  for (int frame = 0; frame < 35; ++frame) {
+    srm::vision::DetectionResult detections;
+    const auto points = ArmorPoseSolver::object_points(0.135,0.055);
+    for (int plate = 0; plate < 4; ++plate) {
+      const double theta = 2.8+3.4*frame*0.04+plate*CV_PI/2;
+      const double c = std::cos(theta), s = std::sin(theta);
+      if (c > -0.25) continue;
+      const double ct = std::cos(0.25), st = std::sin(0.25);
+      const cv::Matx33d world_rotation(-s,-c*st,c*ct, c,-s*st,s*ct, 0,ct,st);
+      cv::Vec3d rvec;
+      cv::Rodrigues(config.pose_solver.rotation_camera_to_gimbal.t()*world_rotation,rvec);
+      const cv::Vec3d position = config.pose_solver.rotation_camera_to_gimbal.t()*
+        cv::Vec3d(5+0.28*c,0.2+0.28*s,0.6);
+      std::vector<cv::Point2f> pixels;
+      cv::projectPoints(std::vector<cv::Point3f>(points.begin(),points.end()),rvec,position,
+        config.pose_solver.camera_matrix,config.pose_solver.distortion_coefficients,pixels);
+      ArmorObservation armor;
+      std::copy(pixels.begin(),pixels.end(),armor.points.begin());
+      detections.armors.push_back(armor);
+    }
+    result = pipeline.process(detections,TimePoint{}+std::chrono::milliseconds(frame*40),frame,20);
+  }
+  assert(result.rotation.reliable && result.tracking.prediction_valid);
+  assert(result.tracking.state == TargetTrackState::tracking);
+  assert(result.tracking.current_observation && result.rotation.current_observation);
+  assert(result.tracking.current_observation->detection_index == result.rotation.current_observation->detection_index);
+  assert(!result.aim.valid && result.aim.error == "fixed_guard_not_configured");
+  const auto lost = pipeline.process({},TimePoint{}+std::chrono::milliseconds(1400),35,20);
+  assert(lost.tracking.state == TargetTrackState::temporarily_lost);
+  assert(!lost.tracking.has_current_measurement && !lost.tracking.current_observation);
+  assert(lost.tracking.last_observation && lost.tracking.prediction_valid && !lost.aim.valid);
+  pipeline.reset();
+  const auto reset = pipeline.process({},TimePoint{}+std::chrono::milliseconds(1440),36,20);
+  assert(reset.tracking.state == TargetTrackState::lost);
+  assert(!reset.tracking.last_observation && !reset.tracking.prediction_valid);
+}
+
 }  // namespace
 
 int main()
@@ -200,5 +248,6 @@ int main()
   test_complete_synthetic_sequence();
   test_bad_bullet_speed_does_not_break_tracking();
   test_reset_clears_cross_frame_state();
+  test_rotation_pipeline_uses_current_association_and_resets();
   return 0;
 }

@@ -201,12 +201,60 @@ bool apply_camera_entry(ApplicationOptions & options, const std::string & key,
   return true;
 }
 
+bool apply_vision_entry(ApplicationOptions & options, const std::string & key,
+                        const std::string & value, const char * context)
+{
+  auto & classifier = options.classifier;
+  auto & rotation = options.rotation;
+  if (key == "detector.classifier.enabled") classifier.enabled = parse_bool(value, context);
+  else if (key == "detector.classifier.model") classifier.model_path = value;
+  else if (key == "detector.classifier.labels") classifier.label_path = value;
+  else if (key == "detector.classifier.min_confidence") classifier.min_confidence = parse_double(value, context);
+  else if (key == "detector.classifier.conflict_margin") classifier.conflict_margin = parse_double(value, context);
+  else if (key == "pose.feature_width_m" || key == "pose.feature_height_m") {
+    if (!options.feature_size_m) options.feature_size_m = cv::Size2d{};
+    const auto parsed = parse_double(value, context);
+    if (key == "pose.feature_width_m") options.feature_size_m->width = parsed;
+    else options.feature_size_m->height = parsed;
+  }
+  else if (key == "rotation.enabled") rotation.enabled = parse_bool(value, context);
+  else if (key == "rotation.assume_static_camera") rotation.assume_static_camera = parse_bool(value, context);
+  else if (key == "rotation.feedback_frame_confirmed") rotation.feedback_frame_confirmed = parse_bool(value, context);
+  else if (key == "rotation.mounting_tilt_rad") {
+    if (value == "unknown") rotation.mounting_tilt_rad.reset();
+    else rotation.mounting_tilt_rad = parse_double(value, context);
+  }
+  else if (key == "rotation.min_updates") {
+    const auto parsed = parse_integer(value, context);
+    if (parsed < 3 || parsed > 512) throw std::invalid_argument("rotation.min_updates must be within [3,512]");
+    rotation.min_updates = static_cast<std::size_t>(parsed);
+  } else {
+    const std::pair<const char *, double *> limits[] = {
+      {"rotation.min_radius_m", &rotation.min_radius_m},
+      {"rotation.max_radius_m", &rotation.max_radius_m},
+      {"rotation.fit_window_seconds", &rotation.fit_window_seconds},
+      {"rotation.short_loss_seconds", &rotation.short_loss_seconds},
+      {"rotation.long_loss_seconds", &rotation.long_loss_seconds},
+      {"rotation.max_position_residual_m", &rotation.max_position_residual_m},
+      {"rotation.max_phase_residual_rad", &rotation.max_phase_residual_rad},
+      {"rotation.max_tilt_error_rad", &rotation.max_tilt_error_rad},
+      {"rotation.max_angular_speed_rad_s", &rotation.max_angular_speed_rad_s},
+      {"rotation.min_normal_span_rad", &rotation.min_normal_span_rad}};
+    for (const auto & entry : limits) {
+      if (key == entry.first) { *entry.second = parse_double(value, context); return true; }
+    }
+    return false;
+  }
+  return true;
+}
+
 void apply_config_entry(
   ApplicationOptions & options, const std::string & key, const std::string & value,
   std::size_t line_number)
 {
   const std::string context = "config line " + std::to_string(line_number) + " (" + key + ")";
   if (apply_camera_entry(options, key, value, context.c_str())) return;
+  if (apply_vision_entry(options, key, value, context.c_str())) return;
   if (key == "input.type") {
     options.frame_source.type = parse_input_type(value, context.c_str());
   } else if (key == "input.source") {
@@ -299,6 +347,21 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
     throw std::invalid_argument("--show-debug requires --dry-run");
   }
   const bool realtime = type == io::FrameSourceType::opencv_camera || type == io::FrameSourceType::mvs_camera;
+  if (options.rotation.assume_static_camera && (realtime || !options.dry_run)) {
+    throw std::invalid_argument("static camera assumption requires dry-run image/video input");
+  }
+  if (options.feature_size_m && (options.feature_size_m->width <= 0 || options.feature_size_m->height <= 0)) {
+    throw std::invalid_argument("feature width and height must both be positive measured dimensions");
+  }
+  const auto & classifier = options.classifier;
+  if (!std::isfinite(classifier.min_confidence) || classifier.min_confidence <= 0.5 ||
+      classifier.min_confidence > 1 || !std::isfinite(classifier.conflict_margin) ||
+      classifier.conflict_margin < 0 || classifier.conflict_margin > 1 ||
+      (classifier.enabled && (classifier.model_path.empty() || classifier.label_path.empty()))) {
+    throw std::invalid_argument("invalid number classifier paths or thresholds");
+  }
+  // 复用模型的参数约束，不加载相机、网络或串口。
+  (void)vision::RotatingTarget(options.rotation);
   if (realtime && (options.start_paused || options.playback_fps != 0.0)) {
     throw std::invalid_argument("camera preview does not support --start-paused or --playback-fps");
   }
@@ -318,6 +381,7 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   }
   // Loading calibration and recording metadata must never let a log truncate the input data.
   for (const auto & protected_path : {options.frame_source.uri, options.calibration_path, options.extrinsics_path,
+         options.classifier.model_path, options.classifier.label_path,
          options.frame_source.uri.empty() ? std::string{} : options.frame_source.uri + ".metadata.yml",
          options.record_path.empty() ? std::string{} : options.record_path + ".metadata.yml"}) {
     if (protected_path.empty()) continue;
@@ -347,6 +411,10 @@ ApplicationOptions default_options()    //初始化配置数据类
   ApplicationOptions options;
   options.frame_source.type = io::FrameSourceType::opencv_camera;
   options.transport.device = "/dev/ttyACM0";
+  options.classifier.enabled = true;
+  options.classifier.model_path = std::string(SRM_DEFAULT_NUMBER_MODEL_DIR) + "/mlp.onnx";
+  options.classifier.label_path = std::string(SRM_DEFAULT_NUMBER_MODEL_DIR) + "/label.txt";
+  options.rotation.enabled = true;
   return options;
 }
 
@@ -433,6 +501,41 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       break;
     }
     if (camera_option) continue;
+    if (argument == "--classifier" || argument == "--no-classifier") {
+      options.classifier.enabled = argument == "--classifier";
+      continue;
+    }
+    if (argument == "--rotation" || argument == "--no-rotation") {
+      options.rotation.enabled = argument == "--rotation";
+      continue;
+    }
+    if (argument == "--static-camera" || argument == "--no-static-camera") {
+      options.rotation.assume_static_camera = argument == "--static-camera";
+      continue;
+    }
+    if (argument == "--feature-size") {
+      const auto value = require_value(index, argc, argv, "--feature-size");
+      const auto comma = value.find(',');
+      if (comma == std::string::npos || value.find(',',comma+1) != std::string::npos) {
+        throw std::invalid_argument("--feature-size expects width_m,height_m");
+      }
+      options.feature_size_m = cv::Size2d(parse_double(value.substr(0,comma),"--feature-size"),
+        parse_double(value.substr(comma+1),"--feature-size"));
+      continue;
+    }
+    const std::pair<const char *, const char *> vision_options[] = {
+      {"--classifier-model", "detector.classifier.model"},
+      {"--classifier-labels", "detector.classifier.labels"},
+      {"--classifier-confidence", "detector.classifier.min_confidence"},
+      {"--rotation-tilt", "rotation.mounting_tilt_rad"}};
+    bool vision_option = false;
+    for (const auto & entry : vision_options) {
+      if (argument != entry.first) continue;
+      (void)apply_vision_entry(options,entry.second,require_value(index,argc,argv,entry.first),entry.first);
+      vision_option = true;
+      break;
+    }
+    if (vision_option) continue;
     if (argument == "--dry-run") {
       options.dry_run = true;
       continue;
@@ -587,9 +690,17 @@ std::string usage(const char * program_name)
     << "  --file-orientation DEG      stored orientation for legacy files without metadata\n"
     << "  --log PATH                  write CSV runtime log\n"
     << "  --summary PATH              write key=value replay summary\n"
-    << "  --debug-dir PATH            save detector debug images\n"
+    << "  --debug-dir PATH            save detection, association and rotation debug images\n"
     << "  --debug-every N             save every Nth frame (default: 1)\n"
     << "  --require-center-pattern/--no-center-pattern  central bright marking check (default: on)\n"
+    << "  --classifier/--no-classifier  ONNX content evidence (default: on; replaces bright marking gate)\n"
+    << "  --classifier-model PATH     ONNX model (default: bundled armor_number/mlp.onnx)\n"
+    << "  --classifier-labels PATH    label file including negative class\n"
+    << "  --classifier-confidence P   acceptance threshold in (0.5,1] (default: 0.7)\n"
+    << "  --rotation/--no-rotation    independent four-plate estimator (default: on)\n"
+    << "  --feature-size W,H          measured light endpoint width,height in metres\n"
+    << "  --static-camera/--no-static-camera  explicit fixed camera assumption (dry-run files only)\n"
+    << "  --rotation-tilt RAD|unknown  measured mounting tilt; unknown=estimate with quality gates\n"
     << "  --show-debug/--no-show-debug  dry-run windows; camera preview has no pause/pacing\n"
     << "  --playback-fps FPS          window playback rate; 0=source or 30 (default)\n"
     << "                             nonzero FPS must be within [0.1, 1000]\n"

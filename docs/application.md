@@ -68,9 +68,16 @@ build/srm_auto_aim_app \
 - `--file-orientation DEG`：仅声明旧文件已有像素方向，不再旋转；新录像自动读取 sidecar；
 - `--log PATH`：写入 CSV 运行日志；
 - `--summary PATH`：写入 key=value 运行摘要；
-- `--debug-dir PATH`：创建目录并保存传统检测 debug 图像；为空时不保存；
+- `--debug-dir PATH`：创建目录并保存检测、实际关联和旋转状态叠加图；为空时不保存；
 - `--debug-every N`：每隔 N 个输入序号保存一张 debug 图，默认 `1`；
-- `--require-center-pattern` / `--no-center-pattern`：开启或关闭中央亮图案检查，默认开启，用于排除相邻装甲板之间的空隙误配；
+- `--classifier` / `--no-classifier`：开启或关闭 ONNX 内容分类，应用默认开启；启用时替代旧中央亮图案门限；
+- `--classifier-model PATH` / `--classifier-labels PATH`：模型和标签路径，默认使用项目 `models/armor_number/`；
+- `--classifier-confidence P`：非 negative 类的最低置信度，默认 `0.7`，范围 `(0.5,1]`；
+- `--require-center-pattern` / `--no-center-pattern`：分类器关闭时启用或关闭旧中央亮图案检查，默认开启；
+- `--rotation` / `--no-rotation`：独立四甲旋转模型，应用默认开启；关闭后使用原视线差分跟踪器；
+- `--feature-size W,H`：检测灯条端点对应的实测矩形宽、高，单位 m；必须同时提供；
+- `--rotation-tilt RAD|unknown`：实测装甲安装倾角，单位 rad，默认未知；
+- `--static-camera` / `--no-static-camera`：明确采用固定相机假设，默认关闭，仅允许 dry-run 图片/视频；
 - `--show-debug` / `--no-show-debug`：开启或关闭可选窗口，默认关闭，仅支持 dry-run；文件输入可回放交互，相机输入实时刷新；
 - `--playback-fps FPS`：窗口播放帧率，`0` 自动选择，非零值范围为 `[0.1, 1000]`；
 - `--start-paused` / `--no-start-paused`：视频是否在第一帧暂停，默认不暂停；
@@ -83,11 +90,23 @@ build/srm_auto_aim_app \
 - `--transmit-period-ms N`、`--io-timeout-ms N`、`--reconnect-ms N`：传输层时间参数；
 - `--help`：显示完整帮助。
 
-`--debug-dir` 会在启动时创建目录（包括必要的父目录）；图像文件命名为 `frame_000000.png`、`frame_000001.png` 等，编号使用 `Frame.sequence`。图像由 `TraditionalDetector::draw_debug()` 生成，不打开 GUI 窗口；当检测回调成功且序号满足 `debug-every` 时才写出。
+`--debug-dir` 会在启动时创建目录（包括必要的父目录）；图像文件命名为 `frame_000000.png`、`frame_000001.png` 等，编号使用 `Frame.sequence`。应用先绘制检测，再调用 `draw_tracking_debug()` 叠加当前关联和旋转状态；当检测回调成功且序号满足 `debug-every` 时才写出。
 
 未提供标定时，dry-run 仍可用于输入和检测 smoke test，但会明确警告；上面的四参数示例不是现场标定。`--live` 必须提供完整 `--calibration` 和 `--extrinsics`，缺失时在启动 CDC 前拒绝。
 
-传统检测默认要求两灯之间存在居中的亮色图案，适用于当前录像中的亮色数字靶板；无标记或暗色标记时可显式使用 `--no-center-pattern`，但可能重新出现空隙误配。它不识别数字身份，严重遮挡、模糊或低对比度仍可能漏检。流程、参考设计、许可和查看方法见 [传统检测说明](traditional_detector.md)。
+应用默认对几何候选提取数字 ROI 并执行 OpenCV DNN CPU 推理，拒绝 `negative` 和低置信度结果，再解决共享灯条冲突；同帧多个不冲突装甲可同时输出。模型类别只提供内容证据，不是物理装甲的唯一身份，也不决定大小装甲或优先级。分类器关闭时才使用旧中央亮图案检查；只传 `--no-center-pattern` 不会关闭分类器。流程、参考设计和许可见 [传统检测说明](traditional_detector.md)。
+
+## 四甲旋转诊断与实际关联
+
+独立旋转模型使用本帧全部有效 PnP 观测和 IPPE 候选姿态，拟合四甲的中心、半径、连续相位与角速度。原 tracker 的视线角差分速度不作为旋转角速度。半径/相位残差、可观测法向跨度、更新数和采样间隔共同限制预测；拒绝的观测不会显示为当前关联。短失预测只允许继承此前可靠的拟合，长失、时间轴重置或参考系有效性变化会清除历史。新观测与上次有效观测的间隔满足 `max_angular_speed_rad_s × 间隔 >= pi/4` 时，四甲相位无法唯一展开，须重新收敛。
+
+可靠预测要求显式特征尺寸、安装倾角和有效固定参考系。`140 × 125 mm` 是规则中的板面尺寸，默认只用于未确认几何的诊断，不能冒充灯条端点的实测宽高。缺少尺寸、倾角或参考系时，数值拟合即使初始化，也保持诊断状态且 `prediction=INVALID`；实际录像还可能因 PnP 法向、双解或拟合残差不合格而无法初始化。
+
+实时相机只有配置 `rotation.feedback_frame_confirmed=true` 后才使用反馈姿态；这表示使用者已经确认 x前/y左/z上、yaw左转、pitch抬头、roll绕x右手和反馈角度单位。runtime 从最多512条完整状态帧历史中选取不晚于图像主机读取时间且年龄不超过50 ms的最近反馈，不插值、不使用未来反馈。时间基准是主机接收/读取时间，不是硬件曝光同步。文件回放不使用当前串口反馈；确认录像来自固定相机后才可显式采用 `--static-camera`。
+
+应用默认旋转分支当前将瞄准结果标记为 `fixed_guard_not_configured`，因此尚不提供有效云台瞄准命令。固定守点、重定位、到点弹道及开火门控属于下一轮；`--no-rotation` 可对照原跟踪/瞄准基线，视觉开火仍默认关闭。
+
+叠加图中，绿色是检测候选，紫色粗四边形是 `tracking.current_observation` 的本帧实际关联；没有本帧关联时不画历史框。文字显示 track/rotation 状态、诊断或可靠标志、半径、相位、角速度和预测有效性。仅在有效预测时绘制青色四板模型位置和关联板 `+0.10 s` 圆圈；暂失时标注 `PREDICTION ONLY`。模型投影标记不是可见目标检测框。
 
 ## 完整标定与输入方向
 
@@ -174,11 +193,13 @@ build/srm_auto_aim_app \
 
 默认按 `FrameSource::nominal_fps()` 播放；源帧率不可用时回退为 30 FPS，可用 `--playback-fps 10` 放慢。播放等待计入检测和保存已花费的时间，处理慢时仍逐帧显示，不丢帧追赶；GUI 事件处理使实际帧率可能低于指定值。自动帧率的等待范围限制为 0.1–1000 FPS。播放时将剩余等待限制在 1–10 ms，已超时时仅请求 1 ms 事件处理，修复原先此分支仍固定请求 10 ms 的额外等待；暂停时请求 10 ms。实际耗时受桌面后端调度影响。
 
-图片输入会在首帧自动暂停，方便观察；按 `n` 继续到下一帧或 EOF。视频读到 EOF 或达到 `--max-frames` 后关闭窗口；需要反复观察时使用 `--loop`，或先用 `--start-paused` 再单步。窗口显示每个成功读取的帧，`--debug-every` 只控制文件保存，保存的图像仍由原来的 `draw_debug()` 生成，不包含窗口信息栏。
+图片输入会在首帧自动暂停，方便观察；按 `n` 继续到下一帧或 EOF。视频读到 EOF 或达到 `--max-frames` 后关闭窗口；需要反复观察时使用 `--loop`，或先用 `--start-paused` 再单步。窗口显示每个成功读取的帧，`--debug-every` 只控制文件保存；两者共用检测、实际关联和旋转叠加，保存图不包含窗口额外的帧序号/播放信息栏。
 
 窗口仅允许与 `--dry-run` 一起使用，因此不会在实际控制流程中等待窗口。文件回放保留暂停/单步，实时相机只泵送 GUI 事件。不启用窗口时不调用 HighGUI，也不加入播放等待；无桌面环境可继续使用 `--debug-dir`、录像、CSV 和 summary。若配置文件启用了窗口，可用 `--no-show-debug --no-start-paused --playback-fps 0` 覆盖；构建不支持窗口或缺少显示环境时，显式请求窗口会报告错误。
 
-跟踪仍使用读取时的单调时间戳，播放速度和暂停会改变帧间时间；窗口回放用于观察检测结果，不能据此评估实际目标角速度、预测精度或现场控制性能。`step_duration_us` 只记录运行步骤，不包含窗口显示、保存或播放等待。
+输入层分别提供主机读取时间 `Frame.timestamp` 与源运动时间 `Frame.motion_timestamp`。视频优先按源帧序号和名义 FPS 建立时间轴；无有效 FPS 时尝试视频位置时间，无法取得有限且递增的源时间时不提供运动时间。源首帧的 0 秒有效；暂停、单步和窗口播放速度不改变文件的源时间间隔。源运动时间与主机读取时间属于不同时间轴，不能直接相减。视频自动循环或显式 `reset()` 后，首帧的 `timeline_reset` 表示源时间轴重新开始；自动循环仍保持对外帧序号和主机读取时间递增。
+
+`motion_time_source` 区分 `video_nominal_fps`、`video_position` 和 `host_arrival`。名义 FPS 不是实测曝光节奏；实时相机目前仍用主机取到帧的时间，也没有设备曝光时刻保证。输入时间轴的回归通过不代表后续算法或整机性能已经验收。`step_duration_us` 只记录运行步骤，不包含窗口显示、保存或播放等待。
 
 ## 原始 BGR 录像
 
@@ -267,6 +288,28 @@ camera.rotation_deg=0
 - `runtime.record_fps`
 - `runtime.record_codec`
 - `detector.require_center_pattern`
+- `detector.classifier.enabled`
+- `detector.classifier.model`
+- `detector.classifier.labels`
+- `detector.classifier.min_confidence`
+- `detector.classifier.conflict_margin`
+- `pose.feature_width_m`
+- `pose.feature_height_m`
+- `rotation.enabled`
+- `rotation.assume_static_camera`
+- `rotation.feedback_frame_confirmed`
+- `rotation.mounting_tilt_rad`
+- `rotation.min_updates`
+- `rotation.min_radius_m`
+- `rotation.max_radius_m`
+- `rotation.fit_window_seconds`
+- `rotation.short_loss_seconds`
+- `rotation.long_loss_seconds`
+- `rotation.max_position_residual_m`
+- `rotation.max_phase_residual_rad`
+- `rotation.max_tilt_error_rad`
+- `rotation.max_angular_speed_rad_s`
+- `rotation.min_normal_span_rad`
 - `camera.intrinsics`
 - `camera.calibration`
 - `camera.extrinsics`
@@ -296,6 +339,29 @@ camera.timeout_ms=1000
 runtime.dry_run=true
 runtime.max_frames=120
 runtime.show_debug=false
+```
+
+分类和旋转的应用默认值如下；特征尺寸默认省略，待实测后成对填写 `pose.feature_width_m`、`pose.feature_height_m`。模型路径按进程工作目录解析，构建时的默认路径指向本项目模型目录；移动源码/二进制部署时应显式配置资源路径。分类冲突 margin 在 `[0,1]` 内，近似等分的共享灯条冲突组会被拒绝。
+
+```ini
+detector.classifier.enabled=true
+detector.classifier.min_confidence=0.7
+detector.classifier.conflict_margin=0.05
+rotation.enabled=true
+rotation.assume_static_camera=false
+rotation.feedback_frame_confirmed=false
+rotation.mounting_tilt_rad=unknown
+rotation.min_updates=8
+rotation.min_radius_m=0.03
+rotation.max_radius_m=1.0
+rotation.fit_window_seconds=1.0
+rotation.short_loss_seconds=0.15
+rotation.long_loss_seconds=0.5
+rotation.max_position_residual_m=0.08
+rotation.max_phase_residual_rad=0.25
+rotation.max_tilt_error_rad=0.20
+rotation.max_angular_speed_rad_s=20
+rotation.min_normal_span_rad=0.15
 ```
 
 配置文件先于命令行应用；同名命令行参数覆盖配置文件值。例如：
@@ -340,6 +406,37 @@ fire_allowed
 fire_flag
 safety_reasons
 error
+motion_time_us
+motion_time_source
+timeline_reset
+track_status
+current_detection_index
+current_label
+current_confidence
+current_tl_x
+current_tl_y
+current_tr_x
+current_tr_y
+current_br_x
+current_br_y
+current_bl_x
+current_bl_y
+rotation_status
+rotation_initialized
+rotation_reliable
+rotation_prediction_valid
+rotation_stable_frame
+rotation_pose_ambiguous
+rotation_center_x_m
+rotation_center_y_m
+rotation_center_z_m
+rotation_radius_m
+rotation_phase_rad
+rotation_omega_rad_s
+rotation_position_rms_m
+rotation_phase_rms_rad
+rotation_observation_age_s
+rotation_associated_plate
 ```
 
 其中：
@@ -348,8 +445,14 @@ error
 - 三个 `transport_*` 字段是该行写入时的累计传输计数，可能受后台收发线程并发影响；
 - `frame_time_us` 是 `steady_clock` 时间点相对于其时钟 epoch 的微秒值，只适合在同一进程/同一日志内比较延迟，不是 Unix 日历时间；
 - `source_time_seconds` 是输入文件提供的源时间；图片和 MVS 输入为 0；
+- `motion_time_us` 是本帧运动时间的微秒值；有效首帧可为 `0`，无法取得有效运动时间时留空。视频源时间与 `frame_time_us` 的主机时间属于不同时间轴，不能直接相减；
+- `motion_time_source` 表示输入层的时间依据：`video_nominal_fps`、`video_position` 或 `host_arrival`。名义帧率不是实测曝光节奏；即使字段标为 `video_position`，仍需检查 `motion_time_us` 是否有值；
+- `timeline_reset=1` 表示本帧开启新的源时间轴，例如视频循环回到起点或显式重置后的首帧；有帧且没有重置时为 `0`，没有帧时留空；
 - `safety_reasons` 使用 `|` 分隔；包含逗号、引号或换行的字段按照 CSV 规则转义；
-- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败；缺失的帧和管线字段留空，所有行保持与表头一致的 21 列。
+- `current_*` 只记录本帧实际关联；暂失或观测被拒时11列均留空，不写入历史观测。`current_detection_index` 是本帧检测下标，`current_label` 是模型内容类别，均不是永久目标编号；
+- `rotation_initialized` 只表示有数值拟合；判断可靠性和是否允许模型投影必须同时看 `rotation_reliable`、`rotation_prediction_valid` 及参考系等门限；
+- 未初始化时中心、半径、相位、角速度和两个残差共8列留空。`rotation_associated_plate` 是当前轨道内模4编号，重捕获后可能重新编号；
+- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败；缺失的帧和管线字段留空，所有行保持与表头一致的52列。时间诊断保留原前24列，当前关联和旋转诊断追加28列；分析脚本应按列名读取。
 
 CSV 记录用于离线诊断，不应直接作为下位机协议输入。
 
@@ -398,7 +501,7 @@ summary 对下列每个阶段输出 `<stage>_sample_count`、`total_<stage>_dura
 | `pipeline` | 检测后的 PnP/选择/跟踪/弹道管线，不包含独立安全控制和 transport 写入 |
 | `logging` | 每步 CSV logger 调用，含关闭日志时的空调用，不代表物理落盘确认 |
 | `recording` | 每帧同步 `VideoRecorder::write`，不含首帧 sidecar 创建 |
-| `debug_draw` | 应用调用 `draw_debug()`，不含窗口内部状态栏绘制 |
+| `debug_draw` | 应用绘制检测、当前关联和旋转诊断，不含窗口内部状态栏绘制 |
 | `debug_save` | 同步调试 PNG 编码/保存 |
 | `gui_display` | 窗口状态栏/mask 准备及 `imshow` 提交 |
 | `gui_wait` | GUI 事件处理、文件节流或用户暂停等待 |

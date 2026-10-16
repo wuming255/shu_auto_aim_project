@@ -1,0 +1,23 @@
+%YAML:1.0
+---
+# REFERENCE ONLY: adapted from sp_vision_25-main/configs/mvs.yaml.
+# These values are not calibrated or verified for the current gimbal installation.
+# Do not use this file for live gimbal control until its R/t are independently checked.
+schema_version: 1
+image_width: 1440
+image_height: 1080
+orientation_deg: 180
+
+camera_frame: "opencv_processed"
+gimbal_frame: "x_forward_y_left_z_up"
+translation_unit: "m"
+
+rotation_camera_to_gimbal: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 0., 0., 1.,
+          -1., 0., 0.,
+           0., -1., 0. ]
+
+translation_camera_to_gimbal: [ 0.1, 0., 0.05 ]

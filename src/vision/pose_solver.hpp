@@ -27,9 +27,11 @@ struct PoseSolverConfig
     0.0, -1.0, 0.0};
   cv::Vec3d translation_camera_to_gimbal{0.0, 0.0, 0.0};
 
-  // 校内赛规则给出的装甲板外形尺寸，单位 m；与参考项目旧版 SMALL_ARMOR_WIDTH 不同，按规则为准。
+  // 有效板面尺寸由校内赛规则确定；不能直接当成灯条端点矩形。
   double armor_width_m = 0.140;
   double armor_height_m = 0.125;
+  // 未实测时保持空值；旧接口仅用于离线诊断，并明确输出尺寸未确认。
+  std::optional<cv::Size2d> feature_size_m;
 
   // IPPE 对平面目标返回两个可能姿态时，拒绝重投影 RMS 大于此值的解。
   double max_reprojection_rms_px = 5.0;
@@ -52,6 +54,7 @@ struct PoseSolution
   double pitch_deg = 0.0;
   double range_m = 0.0;
   double reprojection_rms_px = 0.0;
+  bool feature_geometry_confirmed = false;
 };
 
 class ArmorPoseSolver final
@@ -63,6 +66,7 @@ public:
   // 参数无效时抛 std::invalid_argument；PnP 无有效正深度解时返回 valid=false。
   PoseSolution solve(const std::array<cv::Point2f, 4> & image_points) const;
   PoseSolution solve(const ArmorObservation & armor) const;
+  std::vector<PoseSolution> solve_candidates(const std::array<cv::Point2f, 4> & image_points) const;
 
   const PoseSolverConfig & config() const noexcept;
   static std::array<cv::Point3f, 4> object_points(

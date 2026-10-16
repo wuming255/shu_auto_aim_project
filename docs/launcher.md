@@ -13,7 +13,7 @@
 bash run.sh
 ```
 
-默认回放 `demo.avi` 至 EOF，不开窗口，不启动 CDC，并保存检测图、CSV 和摘要。当前 `runtime.max_frames=0` 表示无帧数上限。`demo.avi` 是本地素材，迁移到其他机器时需提供该视频或修改 `input.source`。
+默认回放 `demo.avi` 至 EOF，不开窗口，不启动 CDC，并保存检测/实际关联叠加图、CSV 和摘要。应用默认开启内容分类与独立四甲旋转诊断。当前 `runtime.max_frames=0` 表示无帧数上限。`demo.avi` 是本地素材，迁移到其他机器时需提供该视频或修改 `input.source`。
 
 首次使用或代码更新后构建：
 
@@ -104,22 +104,32 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 | `--camera-index N` | `input.camera_index` | OpenCV 设备索引，默认 0 |
 | `--max-frames N` | `runtime.max_frames` | 默认 0，不限制 |
 | `--loop` / `--no-loop` | `input.loop` | 循环文件输入，默认 false |
-| `--require-center-pattern` / `--no-center-pattern` | `detector.require_center_pattern` | 中央亮图案检查，默认 true，抑制相邻目标空隙误配 |
+| `--classifier` / `--no-classifier` | `detector.classifier.enabled` | ONNX 内容分类，应用默认 true，拒绝 negative/低置信度并消解共享灯条冲突 |
+| `--classifier-model PATH` | `detector.classifier.model` | 默认使用项目 `models/armor_number/mlp.onnx` |
+| `--classifier-labels PATH` | `detector.classifier.labels` | 默认使用项目 `models/armor_number/label.txt` |
+| `--classifier-confidence P` | `detector.classifier.min_confidence` | 默认 0.7，范围 (0.5,1] |
+| `--require-center-pattern` / `--no-center-pattern` | `detector.require_center_pattern` | 旧中央亮图案检查，默认 true，仅关闭分类器后生效 |
+| `--rotation` / `--no-rotation` | `rotation.enabled` | 独立四甲旋转模型，应用默认 true；关闭后使用原视线差分跟踪器 |
+| `--feature-size W,H` | `pose.feature_width_m` / `pose.feature_height_m` | 实测灯条端点矩形宽高，单位 m，默认未确认 |
+| `--rotation-tilt RAD\|unknown` | `rotation.mounting_tilt_rad` | 实测安装倾角，单位 rad，默认未知 |
+| `--static-camera` / `--no-static-camera` | `rotation.assume_static_camera` | 明确固定相机假设，默认 false，仅允许 dry-run 图片/视频 |
 | `--show-debug` / `--no-show-debug` | `runtime.show_debug` | 两个检测窗口，默认 false；相机实时预览 |
 | `--start-paused` / `--no-start-paused` | `runtime.start_paused` | 视频首帧暂停，默认 false；图片窗口自动暂停 |
 | `--playback-fps FPS` | `runtime.playback_fps` | 窗口播放速度；0 自动，非零范围 0.1–1000 |
-| `--calibration PATH` | `camera.calibration` | 完整 K/畸变/尺寸/方向 YAML，默认空 |
+| `--calibration PATH` | `camera.calibration` | 完整 K/畸变/尺寸/方向 YAML，当前配置为 configs/camera-calibration.yml |
 | `--extrinsics PATH` | `camera.extrinsics` | 处理后相机到云台 R/t YAML，默认空，要求完整内参 |
 | `--intrinsics fx,fy,cx,cy` | `camera.intrinsics` | 旧四参数方式，默认未设置，仅供 dry-run，与完整标定互斥 |
-| `--camera-rotation DEG` | `camera.rotation_deg` | 仅相机旋转，默认 0，顺时针 0/90/180/270 |
+| `--camera-rotation DEG` | `camera.rotation_deg` | 仅相机旋转，当前配置为 180，顺时针 0/90/180/270 |
 | `--file-rotation DEG` | `input.rotation_deg` | 仅文件追加旋转，默认 0 |
 | `--file-orientation DEG` | `input.orientation_deg` | 已有像素方向，仅旧文件有明确记录时填写；新录像自动读 sidecar |
 
-窗口显示检测叠加图与亮度二值图，均可用 **q/Esc**或关闭任一窗口退出。文件回放还支持**空格**暂停/继续、**n**单步；相机预览忽略这两个键，拒绝显式暂停/非零播放速度选项。窗口仅支持 dry-run，依赖 HighGUI 和桌面环境。缺少支持时明确报错，不能把 GUI 加入 live 控制流程。窗口回放的暂停/变速会改变跟踪时间间隔，主要用于观察检测。
+窗口显示检测/实际关联/旋转状态叠加图与亮度二值图，均可用 **q/Esc** 或关闭任一窗口退出。文件回放还支持 **空格** 暂停/继续、**n** 单步；相机预览忽略这两个键，拒绝显式暂停/非零播放速度选项。窗口仅支持 dry-run，依赖 HighGUI 和桌面环境。缺少支持时明确报错，不能把 GUI 加入 live 控制流程。文件运动估计使用独立源时间，暂停/变速不改变源帧间隔；循环或重置会清空轨迹历史。安全新鲜度仍使用主机时间，视频名义 FPS 不保证真实曝光节奏。
 
 开启窗口后，启动程序的前台终端也支持 q/Q/Esc 退出，无需回车；窗口内按键须先点击窗口取得焦点。相机 GUI 事件等待为 10 ms，实际开销写入 `gui_wait`。退出时先关闭窗口；若录制了长视频，终端提示 `finalizing recording` 后仍需等待封口和完整回读完成。
 
-中央图案检查适用于当前录像中带亮色数字的装甲板；无标记或暗色标记时可追加 `--no-center-pattern`，关闭后可能重新出现空隙误配。它不识别数字身份，模糊或遮挡仍可能漏检；流程、对照方法和适用限制见 [传统检测说明](traditional_detector.md)。
+默认分类器替代旧中央图案检查，类别只提供内容证据，不代表物理唯一身份。只传 `--no-center-pattern` 不会关闭分类；需要对照纯几何基线时使用 `--no-classifier --no-center-pattern`，此时可能重新出现空隙误配。流程、对照方法和模型适用限制见 [传统检测说明](traditional_detector.md)。
+
+叠加图的紫色粗框只表示本帧实际关联，没有当前观测时不画历史框。可靠旋转预测还要求显式确认特征尺寸、安装倾角和固定参考系；默认旋转分支目前返回 `fixed_guard_not_configured`，尚不提供有效云台瞄准命令。旋转质量门限、反馈历史及52列CSV说明见 [运行入口说明](application.md#四甲旋转诊断与实际关联)。
 
 `build/srm_calibrate_camera` 是独立的离线标定入口，不通过脚本模式启动。先实测板型、内角点行列和方格尺寸，再按 [标定说明](calibration.md) 处理图片目录或视频。相机与文件方向分开设置；方向在输入层生效，检测、预览和录像保持一致。新录像自动携带已存方向，回放通常无需再旋转。
 
@@ -144,7 +154,7 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 
 | 命令行参数 | 配置键 | 功能/随附默认值 |
 |---|---|---|
-| `--debug-dir PATH` | `runtime.debug_dir` | 检测叠加图，默认 replay_debug/latest/images |
+| `--debug-dir PATH` | `runtime.debug_dir` | 检测、实际关联和旋转状态叠加图，默认 replay_debug/latest/images |
 | `--debug-every N` | `runtime.debug_every` | 每 N 帧存图，默认 20，必须大于 0 |
 | `--log PATH` | `runtime.log` | CSV，默认 replay_debug/latest/run.csv |
 | `--summary PATH` | `runtime.summary` | 摘要，默认 replay_debug/latest/summary.txt |
@@ -152,7 +162,7 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 | `--record-fps FPS` | `runtime.record_fps` | 视频播放元数据 FPS，默认 0 使用输入名义 FPS 或回退 30；不控制采集速度 |
 | `--record-codec FOURCC` | `runtime.record_codec` | 默认 MJPG（有损）；FFV1 可无损；依赖 OpenCV FFmpeg 编解码支持 |
 | `--dry-run` / `--live` | `runtime.dry_run` | 默认 true；--live 启动真实 CDC 传输 |
-| `--device PATH` | `transport.device` | CDC 设备，默认 /dev/ttyACM0 |
+| `--device PATH` | `transport.device` | CDC 设备，当前配置为现场设备 by-id 路径，迁移机器时需核对 |
 | `--transmit-period-ms N` | `transport.transmit_period_ms` | 发送周期，默认 10 ms |
 | `--io-timeout-ms N` | `transport.io_timeout_ms` | 串口 I/O 超时，默认 20 ms |
 | `--reconnect-ms N` | `transport.reconnect_ms` | CDC 重连间隔，默认 100 ms |
@@ -165,7 +175,7 @@ bash run.sh --debug-dir replay_debug/session-01/images \
   --summary replay_debug/session-01/summary.txt
 ```
 
-关闭输出可把配置值留空，或追加 `--debug-dir "" --log "" --summary ""`。单独改变 log/summary 路径时需确保父目录存在。debug 图片是检测叠加图，不是原始录像。
+关闭输出可把配置值留空，或追加 `--debug-dir "" --log "" --summary ""`。单独改变 log/summary 路径时需确保父目录存在。debug 图片包含检测、实际关联和旋转状态叠加；原始 BGR 录像通过 `--record` 保存。
 
 ### 开启录像
 

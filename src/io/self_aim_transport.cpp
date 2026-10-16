@@ -163,6 +163,23 @@ std::optional<std::chrono::steady_clock::time_point> SelfAimTransport::latest_st
   return latest_state_timestamp_;
 }
 
+std::optional<TimedIncomingState> SelfAimTransport::state_snapshot() const
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (!latest_state_ || !latest_state_timestamp_) return std::nullopt;
+  return TimedIncomingState{*latest_state_,*latest_state_timestamp_};
+}
+
+std::optional<TimedIncomingState> SelfAimTransport::state_at(
+  std::chrono::steady_clock::time_point time, std::chrono::milliseconds max_age) const
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  for (auto it = state_history_.rbegin(); it != state_history_.rend(); ++it) {
+    if (it->timestamp <= time) return time-it->timestamp <= max_age ? std::optional<TimedIncomingState>(*it) : std::nullopt;
+  }
+  return std::nullopt;
+}
+
 std::uint64_t SelfAimTransport::sent_frame_count() const noexcept
 {
   return sent_frame_count_.load();
@@ -203,6 +220,7 @@ bool SelfAimTransport::ensure_connected()
       // 上一次连接的状态带入新的连接周期。
       latest_state_.reset();
       latest_state_timestamp_.reset();
+      state_history_.clear();
     }
     connected_ = true;
     state_changed_.notify_all();
@@ -229,6 +247,7 @@ void SelfAimTransport::mark_disconnected(const std::string & error)
     // 可能在尚未收到新状态帧时误把旧 bullet_speed 当作当前状态。
     latest_state_.reset();
     latest_state_timestamp_.reset();
+    state_history_.clear();
     last_error_ = error;
   }
   connected_ = false;
@@ -291,6 +310,8 @@ void SelfAimTransport::receive_loop()
           std::lock_guard<std::mutex> lock(state_mutex_);
           latest_state_ = state;
           latest_state_timestamp_ = std::chrono::steady_clock::now();
+          state_history_.push_back({state,*latest_state_timestamp_});
+          while (state_history_.size() > 512) state_history_.pop_front();
         }
         received_frame_count_++;
       }

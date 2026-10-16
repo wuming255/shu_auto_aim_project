@@ -36,6 +36,8 @@ struct TargetObservation
 
   ArmorObservation armor;
   PoseSolution pose;
+  std::vector<PoseSolution> pose_hypotheses;
+  bool eligible = false;
 
   // 当前选择策略使用云台目标角到零位的二维角距离作为“靠近视轴”指标。
   // 后续接入云台实时姿态或跟踪器时，可在不改变基础观测字段的情况下替换排序策略。

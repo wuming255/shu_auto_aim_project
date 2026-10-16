@@ -2,6 +2,7 @@
 #include "app/runtime_csv_logger.hpp"
 #include "app/runtime_statistics.hpp"
 #include "app/playback_timing.hpp"
+#include "app/tracking_debug.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -255,6 +256,48 @@ void test_center_pattern_options()
   ::unlink(path.c_str());
 }
 
+void test_classifier_and_rotation_options()
+{
+  // 默认入口必须实际加载分类证据和独立旋转模型；现场未知量保持未确认。
+  const auto defaults = parse({});
+  assert(defaults.classifier.enabled && defaults.rotation.enabled);
+  assert(!defaults.feature_size_m && !defaults.rotation.mounting_tilt_rad);
+  assert(!defaults.rotation.assume_static_camera && !defaults.rotation.feedback_frame_confirmed);
+  const auto path = "/tmp/shu_auto_aim_rotation_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream out(path);
+    out << "input.type=video\ninput.source=synthetic.avi\nruntime.dry_run=true\n"
+        << "detector.classifier.enabled=true\ndetector.classifier.model=model.onnx\n"
+        << "detector.classifier.labels=labels.txt\ndetector.classifier.min_confidence=0.8\n"
+        << "detector.classifier.conflict_margin=0.06\n"
+        << "pose.feature_width_m=0.135\npose.feature_height_m=0.055\n"
+        << "rotation.enabled=true\nrotation.assume_static_camera=true\n"
+        << "rotation.feedback_frame_confirmed=false\nrotation.mounting_tilt_rad=0.25\n"
+        << "rotation.max_angular_speed_rad_s=10\nrotation.min_updates=10\n";
+  }
+  // 未接入配置时在此抛出 unknown configuration key。
+  const auto configured = parse_dynamic({"--config", path});
+  assert(configured.classifier.model_path == "model.onnx" && configured.classifier.label_path == "labels.txt");
+  assert(configured.classifier.min_confidence == 0.8 && configured.classifier.conflict_margin == 0.06);
+  assert(configured.feature_size_m == cv::Size2d(0.135,0.055));
+  assert(configured.rotation.enabled && configured.rotation.assume_static_camera);
+  assert(configured.rotation.mounting_tilt_rad == 0.25 && configured.rotation.min_updates == 10);
+  assert(configured.rotation.max_angular_speed_rad_s == 10);
+  const auto disabled = parse_dynamic({"--config", path, "--no-classifier", "--no-rotation"});
+  assert(!disabled.classifier.enabled && !disabled.rotation.enabled);
+  const std::vector<std::vector<std::string>> invalid{
+    {"--input", "camera", "--dry-run", "--static-camera"},
+    {"--input", "video", "--source", "x.avi", "--live", "--static-camera"},
+    {"--feature-size", "0.14,0"}, {"--feature-size", "nan,0.05"},
+    {"--classifier-confidence", "0.4"}, {"--rotation-tilt", "1.6"}};
+  for (const auto & args : invalid) {
+    bool rejected = false;
+    try { (void)parse_dynamic(args); } catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+  ::unlink(path.c_str());
+}
+
 
 void test_config_file_and_cli_override()
 {
@@ -348,11 +391,24 @@ void test_runtime_csv_logger()
   frame.sequence = 4;
   frame.timestamp = std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(12);
   frame.source_time_seconds = 0.25;
+  frame.motion_timestamp = std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(250);
+  frame.motion_time_source = "video_nominal_fps";
   result.frame_read = true;
   result.frame = frame;
   result.pipeline.emplace();
   result.pipeline->selection.observations.resize(2);
   result.pipeline->tracking.state = srm::vision::TargetTrackState::tracking;
+  result.pipeline->tracking.status = "tracking_four_plates";
+  result.pipeline->tracking.has_current_measurement = true;
+  result.pipeline->tracking.current_observation.emplace();
+  auto & associated = *result.pipeline->tracking.current_observation;
+  associated.detection_index = 1;
+  associated.armor.classification = {"2",0.875,{}};
+  associated.armor.points = {{{10,20},{30,20},{30,40},{10,40}}};
+  result.pipeline->rotation.status = "tracking_four_plates";
+  result.pipeline->rotation.initialized = true;
+  result.pipeline->rotation.reliable = true;
+  result.pipeline->rotation.prediction_valid = true;
   result.pipeline->aim.valid = true;
   result.pipeline->aim.yaw_deg = 12.0;
   result.pipeline->aim.pitch_deg = -2.0;
@@ -379,6 +435,9 @@ void test_runtime_csv_logger()
   assert(text.find("tracking") != std::string::npos);
   assert(text.find("fire_disabled") != std::string::npos);
   assert(text.find("\"comma,error\"") != std::string::npos);
+  assert(text.find("error,motion_time_us,motion_time_source,timeline_reset,track_status,") != std::string::npos);
+  assert(text.find("\"comma,error\",250000,video_nominal_fps,0,tracking_four_plates,1,2,0.875,10,20,30,20,30,40,10,40,") != std::string::npos);
+  assert(text.find(",tracking_four_plates,1,1,1,") != std::string::npos);
 
   RuntimeCsvLogger disabled;
   disabled.log(result);
@@ -405,11 +464,33 @@ void test_runtime_csv_missing_values()
   failure.frame.emplace();
   failure.frame->sequence = 9;
   failure.frame->source_time_seconds = 0.25;
+  failure.frame->motion_time_source = "video_position";
   failure.safety.state = SafetyState::safe;
   failure.safety.reasons = {SafetyReason::processing_failed};
   failure.error = "processing failed";
   logger.log(failure);
-  assert(logger.rows_written() == 2);
+
+  // A valid source time of zero must remain distinguishable from a missing time.
+  RuntimeStepResult restart;
+  restart.frame_read = true;
+  restart.frame.emplace();
+  restart.frame->sequence = 10;
+  restart.frame->timestamp = std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(120);
+  restart.frame->motion_timestamp = std::chrono::steady_clock::time_point{};
+  restart.frame->motion_time_source = "video_nominal_fps";
+  restart.frame->timeline_reset = true;
+  logger.log(restart);
+
+  RuntimeStepResult host_time;
+  host_time.frame_read = true;
+  host_time.frame.emplace();
+  host_time.frame->timestamp = std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(150);
+  host_time.frame->motion_timestamp = host_time.frame->timestamp;
+  host_time.pipeline.emplace();
+  host_time.pipeline->tracking.status = "no_observation";
+  host_time.pipeline->tracking.last_observation.emplace(); // 历史观测不得写入 current 列。
+  logger.log(host_time);
+  assert(logger.rows_written() == 4);
 
   std::ifstream input(path);
   // 这些固定测试行不含转义字段，检查缺失值不会移动后续诊断列。
@@ -419,14 +500,19 @@ void test_runtime_csv_missing_values()
     std::istringstream row(line);
     std::vector<std::string> fields;
     for (std::string field; std::getline(row, field, ',');) fields.push_back(field);
+    if (!line.empty() && line.back() == ',') fields.emplace_back();
     return fields;
   };
   const auto header = read_fields();
   const auto eof_fields = read_fields();
   const auto failure_fields = read_fields();
-  assert(header.size() == 21);
+  const auto restart_fields = read_fields();
+  const auto host_fields = read_fields();
+  assert(header.size() == 52);
   assert(eof_fields.size() == header.size());
   assert(failure_fields.size() == header.size());
+  assert(restart_fields.size() == header.size());
+  assert(host_fields.size() == header.size());
   assert(eof_fields[0].empty() && eof_fields[1] == "0" && eof_fields[2] == "1");
   assert(eof_fields[3].empty() && eof_fields[4].empty());
   assert(eof_fields[5] == "77" && eof_fields[6] == "4" && eof_fields[7] == "5" &&
@@ -440,7 +526,53 @@ void test_runtime_csv_missing_values()
   }
   assert(eof_fields[19] == "frame_missing" && eof_fields[20] == end.error);
   assert(failure_fields[19] == "processing_failed" && failure_fields[20] == failure.error);
+  assert(eof_fields[21].empty() && eof_fields[22].empty() && eof_fields[23].empty());
+  assert(failure_fields[21].empty() && failure_fields[22] == "video_position" && failure_fields[23] == "0");
+  assert(restart_fields[3] == "120000" && restart_fields[21] == "0");
+  assert(restart_fields[22] == "video_nominal_fps" && restart_fields[23] == "1");
+  assert(host_fields[3] == "150000" && host_fields[21] == "150000");
+  assert(host_fields[22] == "host_arrival" && host_fields[23] == "0");
+  assert(host_fields[24] == "no_observation");
+  for (std::size_t index = 25; index <= 35; ++index) assert(host_fields[index].empty());
+  for (std::size_t index = 42; index <= 49; ++index) assert(host_fields[index].empty());
+  for (std::size_t index = 24; index < header.size(); ++index) {
+    assert(eof_fields[index].empty() && failure_fields[index].empty());
+  }
   ::unlink(path.c_str());
+}
+
+void test_tracking_drawing_uses_current_association()
+{
+  cv::Mat image = cv::Mat::zeros(240,640,CV_8UC3);
+  srm::control::AutoAimFrameResult result;
+  result.selection.observations.resize(2);
+  result.selection.selected_index = 0;
+  result.tracking.has_current_measurement = true;
+  result.tracking.current_observation.emplace();
+  auto & observation = *result.tracking.current_observation;
+  observation.detection_index = 1;
+  observation.armor.points = {{{30,120},{90,120},{90,170},{30,170}}};
+  result.tracking.last_observation = observation;
+  srm::vision::PoseSolverConfig pose;
+  auto visible = srm::app::draw_tracking_debug(image,result,pose);
+  assert(visible.at<cv::Vec3b>(145,30) == cv::Vec3b(255,0,255));
+  assert(image.at<cv::Vec3b>(145,30) == cv::Vec3b(0,0,0));
+  result.tracking.has_current_measurement = false;
+  result.tracking.current_observation.reset();
+  result.tracking.state = srm::vision::TargetTrackState::temporarily_lost;
+  auto lost = srm::app::draw_tracking_debug(image,result,pose);
+  assert(lost.at<cv::Vec3b>(145,30) == cv::Vec3b(0,0,0));
+  auto & rotation = result.rotation;
+  rotation.initialized = true;
+  rotation.stable_frame_valid = true;
+  rotation.prediction_valid = true;
+  rotation.center_world_m = {5,0,0}; rotation.radius_m = 0.25;
+  pose.camera_matrix = {800,0,320, 0,800,150, 0,0,1};
+  const auto predicted = srm::app::draw_tracking_debug(image,result,pose);
+  assert(predicted.at<cv::Vec3b>(150,320) == cv::Vec3b(255,255,0));
+  rotation.prediction_valid = false;
+  const auto invalid = srm::app::draw_tracking_debug(image,result,pose);
+  assert(invalid.at<cv::Vec3b>(150,320) == cv::Vec3b(0,0,0));
 }
 
 void test_runtime_statistics()
@@ -505,9 +637,11 @@ int main()
   test_mvs_options();
   test_recording_options();
   test_center_pattern_options();
+  test_classifier_and_rotation_options();
   test_config_file_and_cli_override();
   test_runtime_csv_logger();
   test_runtime_csv_missing_values();
+  test_tracking_drawing_uses_current_association();
   test_runtime_statistics();
   return 0;
 }

@@ -58,12 +58,23 @@ bool all_positive_depth(const cv::Vec3d & translation, const cv::Vec3d & rotatio
 
 ArmorPoseSolver::ArmorPoseSolver(PoseSolverConfig config)
 : config_(std::move(config)),
-  object_points_(object_points(config_.armor_width_m, config_.armor_height_m))
+  object_points_(object_points(config_.feature_size_m ? config_.feature_size_m->width : config_.armor_width_m,
+                              config_.feature_size_m ? config_.feature_size_m->height : config_.armor_height_m))
 {
   validate_config();
 }
 
 PoseSolution ArmorPoseSolver::solve(const std::array<cv::Point2f, 4> & image_points) const
+{
+  const auto candidates = solve_candidates(image_points);
+  if (!candidates.empty()) return candidates.front();
+  PoseSolution failure;
+  failure.error = "PnP produced no positive-depth pose within reprojection RMS limit";
+  return failure;
+}
+
+std::vector<PoseSolution> ArmorPoseSolver::solve_candidates(
+  const std::array<cv::Point2f, 4> & image_points) const
 {
   for (const auto & point : image_points) {
     if (!finite_point(point)) throw std::invalid_argument("armor image point is not finite");
@@ -79,13 +90,11 @@ PoseSolution ArmorPoseSolver::solve(const std::array<cv::Point2f, 4> & image_poi
     cv::Mat(config_.distortion_coefficients), rotation_vectors, translation_vectors, false,
     cv::SOLVEPNP_IPPE);
 
-  PoseSolution best;
+  std::vector<PoseSolution> candidates;
   if (solution_count <= 0 || rotation_vectors.empty() || translation_vectors.empty()) {
-    best.error = "solvePnPGeneric did not produce a pose";
-    return best;
+    return candidates;
   }
 
-  double best_rms = std::numeric_limits<double>::infinity();
   for (std::size_t i = 0; i < rotation_vectors.size() && i < translation_vectors.size(); ++i) {
     const cv::Vec3d rotation_vector = read_vec3(rotation_vectors[i]);
     const cv::Vec3d translation = read_vec3(translation_vectors[i]);
@@ -105,7 +114,7 @@ PoseSolution ArmorPoseSolver::solve(const std::array<cv::Point2f, 4> & image_poi
       squared_error += dx * dx + dy * dy;
     }
     const double rms = std::sqrt(squared_error / image_points.size());
-    if (!finite(rms) || rms >= best_rms) continue;
+    if (!finite(rms) || rms > config_.max_reprojection_rms_px) continue;
 
     const cv::Vec3d translation_gimbal =
       config_.rotation_camera_to_gimbal * translation + config_.translation_camera_to_gimbal;
@@ -114,6 +123,7 @@ PoseSolution ArmorPoseSolver::solve(const std::array<cv::Point2f, 4> & image_poi
       continue;
     }
 
+    PoseSolution best;
     best.valid = true;
     best.error.clear();
     best.translation_camera_m = translation;
@@ -126,18 +136,14 @@ PoseSolution ArmorPoseSolver::solve(const std::array<cv::Point2f, 4> & image_poi
     best.yaw_deg = best.yaw_rad * 180.0 / kPi;
     best.pitch_deg = best.pitch_rad * 180.0 / kPi;
     best.reprojection_rms_px = rms;
-    best_rms = rms;
+    best.feature_geometry_confirmed = config_.feature_size_m.has_value();
+    candidates.push_back(best);
   }
 
-  if (!best.valid) {
-    best.error = "PnP produced no positive-depth pose";
-    return best;
-  }
-  if (best.reprojection_rms_px > config_.max_reprojection_rms_px) {
-    best.valid = false;
-    best.error = "PnP reprojection RMS exceeds configured limit";
-  }
-  return best;
+  std::stable_sort(candidates.begin(), candidates.end(), [](const auto & a, const auto & b) {
+    return a.reprojection_rms_px < b.reprojection_rms_px;
+  });
+  return candidates;
 }
 
 PoseSolution ArmorPoseSolver::solve(const ArmorObservation & armor) const
@@ -167,6 +173,10 @@ std::array<cv::Point3f, 4> ArmorPoseSolver::object_points(double width_m, double
 
 void ArmorPoseSolver::validate_config() const
 {
+  if (!finite(config_.armor_width_m) || config_.armor_width_m <= 0 ||
+      !finite(config_.armor_height_m) || config_.armor_height_m <= 0) {
+    throw std::invalid_argument("invalid armor surface dimensions");
+  }
   const auto & matrix = config_.camera_matrix;
   if (!finite(matrix(0, 0)) || !finite(matrix(1, 1)) || matrix(0, 0) <= 0.0 ||
       matrix(1, 1) <= 0.0 || !finite(matrix(0, 1)) || !finite(matrix(0, 2)) ||

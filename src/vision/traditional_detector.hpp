@@ -7,6 +7,8 @@
 #include <opencv2/imgproc.hpp>
 #include <string>
 #include <vector>
+#include <optional>
+#include "vision/number_classifier.hpp"
 
 namespace srm::vision
 {
@@ -46,6 +48,7 @@ struct TraditionalDetectorConfig        // 检测器配置文件
   double min_pattern_contrast = 6.0;
   // 连通图案的最小高度 / 矫正后的灯条长度。
   double min_pattern_height_ratio = 0.5;
+  NumberClassifierConfig classifier;
 };
 
 struct LightbarObservation      // 一根灯条的检测结果
@@ -81,6 +84,7 @@ struct ArmorObservation                       // 装甲板识别结果
   double side_ratio = 0.0;
   // 灯条方向与装甲板横向方向的矩形误差，单位为弧度。
   double rectangular_error = 0.0;
+  NumberClassification classification;
 };
 
 struct DetectionResult                // 单次检测结果
@@ -89,7 +93,11 @@ struct DetectionResult                // 单次检测结果
   cv::Mat brightness_mask;            // 二值图
   std::vector<LightbarObservation> lightbars;     // 灯条列表
   std::vector<ArmorObservation> armors;           // 装甲板列表
+  std::vector<ArmorObservation> rejected_armors;  // 内容或共享灯条消歧失败，保留证据。
 };
+
+// 按内容置信度选择互不共享灯条的候选；近似等分或过大的冲突组保留拒绝证据。
+void resolve_shared_light_conflicts(DetectionResult & result, double margin);
 
 class TraditionalDetector final
 {
@@ -116,6 +124,7 @@ private:
   cv::Rect make_roi(const ArmorObservation & armor, const cv::Size & image_size) const;       // 识别关注区域
 
   TraditionalDetectorConfig config_;
+  std::optional<NumberClassifier> classifier_;
   double max_lightbar_angle_error_rad_ = 0.0;
   double max_rectangular_error_rad_ = 0.0;
 };

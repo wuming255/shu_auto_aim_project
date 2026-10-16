@@ -63,7 +63,9 @@ TargetSelection TargetSelector::select(
     observation.armor = detections.armors[detection_index];
 
     try {
-      observation.pose = pose_solver.solve(observation.armor);
+      observation.pose_hypotheses = pose_solver.solve_candidates(observation.armor.points);
+      observation.pose = observation.pose_hypotheses.empty() ? pose_solver.solve(observation.armor) :
+                         observation.pose_hypotheses.front();
     } catch (const std::exception & exception) {
       // 检测器正常输出时点应为有限值；这里仍把单个坏候选隔离，避免一帧中其他
       // 有效目标被 OpenCV 输入检查异常连带丢弃。
@@ -72,6 +74,7 @@ TargetSelection TargetSelector::select(
     }
 
     observation.aim_error_rad = aim_error(observation.pose);
+    observation.eligible = eligible(observation);
     result.observations.push_back(std::move(observation));
   }
 

@@ -1,14 +1,24 @@
 # Catch loss of root-relative paths, quoted arguments, config precedence and exit codes.
 file(MAKE_DIRECTORY "${OUTPUT_DIR}/working elsewhere")
 function(launch expected)
+  # Every invocation uses a test-owned config unless it explicitly tests another one.
+  # This also isolates missing-input errors and camera queries from run.conf.
+  list(FIND ARGN "--config" config_index)
+  set(config_args)
+  if(config_index EQUAL -1)
+    set(config_args --config "${OUTPUT_DIR}/offline.conf")
+  endif()
   execute_process(COMMAND "${CMAKE_COMMAND}" -E env "SRM_APP=${APP}"
-    bash "${ROOT}/run.sh" ${ARGN}
+    bash "${ROOT}/run.sh" ${ARGN} ${config_args}
     WORKING_DIRECTORY "${OUTPUT_DIR}/working elsewhere"
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 15)
   if(NOT "${result}" STREQUAL "${expected}")
     message(FATAL_ERROR "launcher expected ${expected}, got ${result}: ${output} ${error}")
   endif()
 endfunction()
+
+# Use a controlled offline config, independent of the operator's calibration/GUI setup.
+file(WRITE "${OUTPUT_DIR}/offline.conf" "runtime.dry_run=true\n")
 
 launch(0 --help)
 # Relative fixture must resolve from project root, even when invoked elsewhere.
@@ -21,7 +31,7 @@ file(READ "${OUTPUT_DIR}/default.txt" summary)
 foreach(expected "processed_frames=1" "dry_run=1" "error_count=0"
     "nonzero_fire_request_count=0" "transport_sent_frame_count=0")
   if(NOT summary MATCHES "(^|\n)${expected}(\n|$)")
-    message(FATAL_ERROR "default configuration: missing ${expected}")
+    message(FATAL_ERROR "offline configuration: missing ${expected}")
   endif()
 endforeach()
 if(NOT EXISTS "${OUTPUT_DIR}/images with spaces/frame_000000.png")

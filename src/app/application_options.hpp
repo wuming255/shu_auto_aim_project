@@ -6,6 +6,7 @@
 
 #include "io/frame_source.hpp"
 #include "io/self_aim_transport.hpp"
+#include "vision/rotating_target.hpp"
 
 namespace srm::app
 {
@@ -21,6 +22,9 @@ struct ApplicationOptions
   bool list_cameras = false;  // 枚举 MVS USB 设备后退出，不打开相机/CDC。
   bool camera_info = false;   // 打开 MVS 相机并查询节点后退出，不修改节点/取流/CDC。
   bool require_center_pattern = true;  // 中央亮图案检查；无此标记的靶板可显式关闭。
+  vision::NumberClassifierConfig classifier;
+  vision::RotatingTargetConfig rotation;
+  std::optional<cv::Size2d> feature_size_m;  // 灯条端点矩形实测值；空值表示未确认。
   std::string config_path;
   std::string log_path;
   std::string debug_directory;

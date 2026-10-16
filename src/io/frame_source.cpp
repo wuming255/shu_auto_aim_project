@@ -216,6 +216,9 @@ bool FrameSource::read_capture(Frame & frame)
         return false;
       }
       end_of_stream_ = false;
+      source_frame_index_ = 0;
+      last_source_time_.reset();
+      timeline_reset_pending_ = true;
     } else {
       end_of_stream_ = true;
       return false;
@@ -224,12 +227,26 @@ bool FrameSource::read_capture(Frame & frame)
 
   frame.bgr = image.clone();
   const double position_ms = capture_.get(cv::CAP_PROP_POS_MSEC);   // 获取当前帧在视频中的位置，单位为毫秒
-  if (finite_positive(position_ms)) {       // 设置文件源的时间（这帧图像在文件中的时间位置，单位为秒）
+  if (config_.type == FrameSourceType::video_file && finite_positive(nominal_fps_)) {
+    // AVI 的 FPS 是名义时间轴，不能称为实测曝光时刻；与窗口播放速度无关。
+    frame.source_time_seconds = static_cast<double>(source_frame_index_) / nominal_fps_;
+    frame.motion_time_source = "video_nominal_fps";
+  } else if (config_.type == FrameSourceType::video_file && std::isfinite(position_ms) && position_ms >= 0.0) {
     frame.source_time_seconds = position_ms / 1000.0;
-  } else if (finite_positive(nominal_fps_)) {
-    frame.source_time_seconds = static_cast<double>(next_sequence_) / nominal_fps_;
+    frame.motion_time_source = "video_position";
   } else {
     frame.source_time_seconds = 0.0;
+  }
+
+  if (config_.type == FrameSourceType::video_file) {
+    const double seconds = frame.source_time_seconds;
+    if (std::string(frame.motion_time_source) != "host_arrival" && std::isfinite(seconds) &&
+        seconds >= 0.0 && (!last_source_time_ || seconds > *last_source_time_)) {
+      frame.motion_timestamp = std::chrono::steady_clock::time_point(
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds)));
+    }
+    last_source_time_ = seconds;
+    ++source_frame_index_;
   }
 
   end_of_stream_ = false;
@@ -249,6 +266,9 @@ void FrameSource::stamp(Frame & frame, double source_time_seconds)
   frame.timestamp = timestamp;
   frame.sequence = next_sequence_++;      // 帧序号+1
   frame.source_time_seconds = source_time_seconds; 
+  if (config_.type != FrameSourceType::video_file) frame.motion_timestamp = timestamp;
+  frame.timeline_reset = timeline_reset_pending_;
+  timeline_reset_pending_ = false;
 }
 
 void FrameSource::reset()
@@ -258,6 +278,9 @@ void FrameSource::reset()
   next_sequence_ = 0;
   last_timestamp_ = {};
   last_error_.clear();
+  source_frame_index_ = 0;
+  last_source_time_.reset();
+  timeline_reset_pending_ = true;
 
   if (config_.type == FrameSourceType::image_file) return;
 

@@ -334,6 +334,51 @@ void test_invalid_appearance_configuration()
   }
 }
 
+void test_shared_lights_keep_multiple_independent_armors()
+{
+  const auto armor = [](std::size_t left, std::size_t right, double confidence) {
+    srm::vision::ArmorObservation result;
+    result.left.id = left; result.right.id = right;
+    result.classification = {"2",confidence,{}};
+    return result;
+  };
+  srm::vision::DetectionResult result;
+  result.armors = {armor(0,1,0.90),armor(1,2,0.99),armor(2,3,0.92),armor(4,5,0.8)};
+  srm::vision::resolve_shared_light_conflicts(result,0.05);
+  assert(result.armors.size() == 3 && result.rejected_armors.size() == 1);
+  assert(result.armors[0].left.id == 0 && result.armors[1].left.id == 2 && result.armors[2].left.id == 4);
+  assert(result.rejected_armors[0].classification.rejection == "shared_light");
+  for (double margin : {0.0,0.05}) {
+    result = {};
+    result.armors = {armor(0,1,0.9),armor(1,2,0.9),armor(4,5,0.8)};
+    srm::vision::resolve_shared_light_conflicts(result,margin);
+    assert(result.armors.size() == 1 && result.armors[0].left.id == 4);
+    assert(result.rejected_armors.size() == 2);
+    assert(result.rejected_armors[0].classification.rejection == "ambiguous_shared_light");
+  }
+}
+
+void test_classifier_replaces_brightness_gate_and_rejects_blank()
+{
+  TraditionalDetectorConfig config;
+  config.classifier.enabled = true;
+  config.classifier.model_path = std::string(SRM_TEST_NUMBER_MODEL_DIR)+"/mlp.onnx";
+  config.classifier.label_path = std::string(SRM_TEST_NUMBER_MODEL_DIR)+"/label.txt";
+  config.min_pattern_contrast = 255; // 旧图案门限必不通过，但不能抢先排除模型候选。
+  const auto image = make_blue_armor_image();
+  const auto result = TraditionalDetector(config).detect(image);
+  // 手绘字体不作为模型精度真值；确认几何候选确实经过分类器而非旧图案门限。
+  assert(result.armors.size() + result.rejected_armors.size() == 1);
+  const auto & classified = result.armors.empty() ? result.rejected_armors[0] : result.armors[0];
+  assert(!classified.classification.label.empty());
+  assert(classified.classification.confidence > 0);
+  auto blank = image.clone();
+  cv::rectangle(blank,{103,0,55,240},{0,0,0},cv::FILLED);
+  const auto rejected = TraditionalDetector(config).detect(blank);
+  assert(rejected.armors.empty() && rejected.rejected_armors.size() == 1);
+  assert(!rejected.rejected_armors[0].classification.rejection.empty());
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
@@ -356,6 +401,8 @@ int main(int argc, char ** argv)
     {"tilted_red_armor", test_tilted_red_armor_keeps_corner_order},
     {"intervening_color_and_polygon", test_intervening_light_uses_polygon_and_all_colors},
     {"appearance_configuration", test_invalid_appearance_configuration},
+    {"shared_lights", test_shared_lights_keep_multiple_independent_armors},
+    {"classifier", test_classifier_replaces_brightness_gate_and_rejects_blank},
   };
   bool ran = false;
   for (const auto & test : tests) {
