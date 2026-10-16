@@ -49,7 +49,8 @@ void test_command_line_options()
     "--intrinsics", "800,801,320,240", "--log", "/tmp/run.csv",
     "--debug-dir", "/tmp/debug", "--summary", "/tmp/summary.txt", "--debug-every", "3",
     "--show-debug", "--start-paused", "--playback-fps", "12.5",
-    "--transmit-period-ms", "15", "--io-timeout-ms", "22", "--reconnect-ms", "33"});
+     "--transmit-period-ms", "15", "--io-timeout-ms", "22", "--reconnect-ms", "33",
+     "--command-max-age-ms", "44"});
 
   assert(options.frame_source.type == FrameSourceType::video_file);
   assert(options.frame_source.uri == "input.mp4");
@@ -61,6 +62,7 @@ void test_command_line_options()
   assert(options.transport.transmit_period == std::chrono::milliseconds(15));
   assert(options.transport.io_timeout == std::chrono::milliseconds(22));
   assert(options.transport.reconnect_interval == std::chrono::milliseconds(33));
+  assert(options.transport.command_max_age == std::chrono::milliseconds(44));
   assert(options.intrinsics_set);
   assert(options.fx == 800.0 && options.fy == 801.0);
   assert(options.cx == 320.0 && options.cy == 240.0);
@@ -315,6 +317,16 @@ void test_config_file_and_cli_override()
            << "transport.transmit_period_ms=17\n"
            << "transport.io_timeout_ms=23\n"
            << "transport.reconnect_ms=31\n"
+           << "transport.command_max_age_ms=41\n"
+           << "fixed_guard.relocalization_center_threshold_m=0.12\n"
+           << "fixed_guard.relocalization_radius_threshold_m=0.06\n"
+           << "fixed_guard.relocalization_yaw_threshold_rad=0.20\n"
+           << "fixed_guard.hit_window_half_width_rad=0.09\n"
+           << "fixed_guard.max_hold_seconds=0.20\n"
+           << "safety.allow_visual_fire=true\n"
+           << "safety.require_gimbal_feedback_for_fire=true\n"
+           << "safety.max_gimbal_error_deg=0.7\n"
+           << "safety.min_gimbal_settle_ms=60\n"
            << "runtime.dry_run=true\n"
            << "runtime.log=config.csv\n"
            << "runtime.debug_dir=config_debug\n"
@@ -354,6 +366,15 @@ void test_config_file_and_cli_override()
 
   const auto config_only = parse_dynamic({"--config", path});
   assert(config_only.dry_run);
+  assert(config_only.transport.command_max_age == std::chrono::milliseconds(41));
+  assert(config_only.fixed_guard.relocalization_center_threshold_m == 0.12);
+  assert(config_only.fixed_guard.relocalization_radius_threshold_m == 0.06);
+  assert(config_only.fixed_guard.relocalization_yaw_threshold_rad == 0.20);
+  assert(config_only.fixed_guard.hit_window_half_width_rad == 0.09);
+  assert(config_only.fixed_guard.max_hold_seconds == 0.20);
+  assert(config_only.safety.allow_visual_fire && config_only.safety.require_gimbal_feedback_for_fire);
+  assert(config_only.safety.max_gimbal_error_deg == 0.7);
+  assert(config_only.safety.min_gimbal_settle_time == std::chrono::milliseconds(60));
   assert(config_only.frame_source.loop);
   assert(config_only.max_frames == 4);
   assert(config_only.fx == 700.0 && config_only.fy == 701.0);
@@ -508,7 +529,7 @@ void test_runtime_csv_missing_values()
   const auto failure_fields = read_fields();
   const auto restart_fields = read_fields();
   const auto host_fields = read_fields();
-  assert(header.size() == 52);
+  assert(header.size() == 56);
   assert(eof_fields.size() == header.size());
   assert(failure_fields.size() == header.size());
   assert(restart_fields.size() == header.size());

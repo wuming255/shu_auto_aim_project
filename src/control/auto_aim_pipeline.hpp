@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "control/aim_compensator.hpp"
+#include "control/fixed_guard.hpp"
 #include "vision/pose_solver.hpp"
 #include "vision/target_selector.hpp"
 #include "vision/target_tracker.hpp"
@@ -21,6 +22,7 @@ struct AutoAimPipelineConfig
   vision::TargetTrackerConfig tracker;
   AimCompensatorConfig aim_compensator;
   vision::RotatingTargetConfig rotation;
+  FixedGuardConfig fixed_guard;
 };
 
 struct AutoAimFrameResult
@@ -32,6 +34,10 @@ struct AutoAimFrameResult
   vision::TargetTrackEstimate tracking;
   AimSolution aim;
   vision::RotationEstimate rotation;
+  FixedGuardResult fixed_guard;
+  bool guard_command_valid = false;
+  bool guard_target_visible = false;
+  bool fire_window_valid = false;
 };
 
 class AutoAimPipeline final
@@ -62,6 +68,7 @@ private:
   vision::TargetTracker target_tracker_;
   AimCompensator aim_compensator_;
   vision::RotatingTarget rotating_target_;
+  FixedGuardController fixed_guard_;
   std::optional<vision::TargetObservation> rotation_last_observation_;
 };
 

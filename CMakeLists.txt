@@ -181,6 +181,7 @@ target_compile_options(srm_aim_compensator PRIVATE
 
 add_library(srm_auto_aim_pipeline STATIC
   src/control/auto_aim_pipeline.cpp
+  src/control/fixed_guard.cpp
 )
 
 target_include_directories(srm_auto_aim_pipeline
@@ -444,6 +445,15 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
   )
   add_test(NAME srm_auto_aim_pipeline_test COMMAND srm_auto_aim_pipeline_test)
+
+  add_executable(srm_fixed_guard_test
+    tests/fixed_guard_test.cpp
+  )
+  target_link_libraries(srm_fixed_guard_test PRIVATE srm_auto_aim_pipeline)
+  target_compile_options(srm_fixed_guard_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+  )
+  add_test(NAME srm_fixed_guard_test COMMAND srm_fixed_guard_test)
 
   add_executable(srm_safety_controller_test
     tests/safety_controller_test.cpp

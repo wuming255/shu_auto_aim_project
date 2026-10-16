@@ -230,11 +230,14 @@ void test_rotation_pipeline_uses_current_association_and_resets()
   assert(result.tracking.state == TargetTrackState::tracking);
   assert(result.tracking.current_observation && result.rotation.current_observation);
   assert(result.tracking.current_observation->detection_index == result.rotation.current_observation->detection_index);
-  assert(!result.aim.valid && result.aim.error == "fixed_guard_not_configured");
+  assert(result.aim.valid);
+  assert(result.guard_command_valid);
   const auto lost = pipeline.process({},TimePoint{}+std::chrono::milliseconds(1400),35,20);
   assert(lost.tracking.state == TargetTrackState::temporarily_lost);
   assert(!lost.tracking.has_current_measurement && !lost.tracking.current_observation);
-  assert(lost.tracking.last_observation && lost.tracking.prediction_valid && !lost.aim.valid);
+  assert(lost.tracking.last_observation && lost.tracking.prediction_valid);
+  assert(lost.aim.valid && lost.guard_command_valid);
+  assert(!lost.guard_target_visible && !lost.fire_window_valid);
   pipeline.reset();
   const auto reset = pipeline.process({},TimePoint{}+std::chrono::milliseconds(1440),36,20);
   assert(reset.tracking.state == TargetTrackState::lost);

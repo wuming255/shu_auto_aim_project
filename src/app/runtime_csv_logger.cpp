@@ -95,8 +95,12 @@ void RuntimeCsvLogger::log(
     }
     stream_ << ',' << rotation.observation_age_seconds << ',';
     if (rotation.initialized || rotation.current_visible) stream_ << rotation.associated_plate;
+    stream_ << ',' << (pipeline.guard_command_valid ? 1 : 0)
+            << ',' << (pipeline.guard_target_visible ? 1 : 0)
+            << ',' << (pipeline.fire_window_valid ? 1 : 0)
+            << ',' << pipeline.fixed_guard.phase_error_rad;
   } else {
-    for (int column = 0; column < 28; ++column) stream_ << ',';
+    for (int column = 0; column < 32; ++column) stream_ << ',';
   }
   stream_ << '\n';
   stream_.flush();
@@ -163,7 +167,8 @@ void RuntimeCsvLogger::write_header()
              "rotation_stable_frame,rotation_pose_ambiguous,"
              "rotation_center_x_m,rotation_center_y_m,rotation_center_z_m,rotation_radius_m,"
              "rotation_phase_rad,rotation_omega_rad_s,rotation_position_rms_m,rotation_phase_rms_rad,"
-             "rotation_observation_age_s,rotation_associated_plate\n";
+              "rotation_observation_age_s,rotation_associated_plate,guard_command_valid,"
+              "guard_target_visible,fire_window_valid,guard_phase_error_rad\n";
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed to write runtime log header: " + path_);
 }

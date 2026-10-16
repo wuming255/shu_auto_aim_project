@@ -26,7 +26,7 @@
 
 MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选，离线输入不调用 SDK；真实硬件与完整 SDK ABI 匹配仍按 `questions.md` 确认。参考项目只复用适合当前接口的采集调用流程和通用思路。
 
-第二十四轮已通过完整23项 CTest、应用帮助和395帧离线回放。应用默认旋转分支当前只提供关联与旋转诊断，瞄准结果为 `fixed_guard_not_configured`；固定守点与到点弹道等决策尚未接入。以下带轮次标题的旧 tracker、弹道与闭环章节记录基础模块，默认运行路径以第二十四轮扩展说明为准。
+第二十五轮在第二十四轮的旋转诊断基础上接入固定守点、到点弹道、安全门和 transport 命令过期保护；完整 CTest、应用帮助和默认视频 dry-run 已重新验证。默认回放结果随输入素材变化，当前 `demo.avi` 实际处理687帧并写出EOF行；该视频无sidecar，默认配置声明其已有180°处理方向。真实标定、反馈语义、云台和发射仍未现场验证。以下带轮次标题的旧 tracker、弹道与闭环章节记录基础模块，默认运行路径以第二十五轮扩展说明为准。
 
 ## 复用策略
 
@@ -127,8 +127,15 @@ MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选�
 - 可靠性要求已确认特征尺寸、安装倾角、固定参考系，以及足够更新数、法向跨度、合理半径和拟合残差；缺少确认时只作诊断。板号只有模4含义，重捕获后可重新编号。
 - 短失预测继承上一可靠拟合；未可靠的拟合不能因丢帧升级。长失、时间倒退、参考系有效性变化重置；收到新观测时，若最大角速度乘以有效观测间隔达到 `pi/4`，相位关联已不唯一，清空旧模型重新收敛。
 - 实时输入只有显式 `feedback_frame_confirmed` 后才使用不晚于图像主机时间、年龄不超过50 ms的反馈姿态。约定 x前/y左/z上、yaw左转、pitch抬头、roll绕x右手，反馈角度由度转弧度；现场语义必须确认。文件输入不用当前串口姿态，仅可在 dry-run 明确声明固定相机。
-- `AutoAimPipeline` 将旋转状态映射为现有 tracking 接口，保留 current 与 last observation 的区别；开启旋转时瞄准明确返回 `fixed_guard_not_configured`。关闭旋转才执行原 tracker 与 AimCompensator 基线。
+- `AutoAimPipeline` 将旋转状态映射为现有 tracking 接口，保留 current 与 last observation 的区别；开启旋转时由 `FixedGuardController` 锁存守点、按中心/半径/yaw 阈值重定位，使用弹速和飞行时间计算到点相位，并输出命中窗口和暂失状态。关闭旋转才执行原 tracker 与 AimCompensator 基线。
 - 自动化覆盖真实投影合成的切甲、相机转动、多观测、暂失/长失、拒绝观测、时间异常、未确认几何/倾角，以及带像素噪声的反转后重新收敛。真实录像目前没有可靠预测帧，合成回归不证明现场旋转精度。
+
+## 固定守点、开火门与命令过期（第二十五轮）
+
+- `src/control/fixed_guard.*` 在旋转模型可靠且通过质量门后锁存固定守点；中心、半径或目标 yaw 超过配置阈值时重新定位。短暂目标丢失可在 `max_hold_seconds` 内保持最后有效瞄准，但 `guard_target_visible=false` 会阻止开火；长丢失清除守点并要求重新捕获。
+- 固定守点调用 `AimCompensator` 使用下位机弹速和预计命中时刻计算装甲相位，只有在配置的相位命中窗口内才报告 `fire_window_valid`。这验证的是软件接口和安全条件，不等价于现场命中精度。
+- `SafetyController` 要求新鲜帧、有效 transport 状态、有效弹速、守点瞄准、当前可见目标、命中窗口、显式视觉开火意图，以及可选的云台反馈误差和持续稳定时间；默认 `allow_visual_fire=false`，应用入口不提供视觉开火意图，`fire_flag` 保持 0。
+- `SelfAimTransport` 为待发送命令记录更新时间；超过 `command_max_age` 后，读取和周期发送退回全零安全命令。该机制是发送侧状态保护，不增加正式协议字段。
 
 ## 阶段六垂直组合接口（第十轮基础版本）
 
@@ -171,7 +178,7 @@ MVS 适配器已通过相同帧接口接入，编译支持和运行库均可选�
 - `RuntimeStepResult::step_duration` 使用 `steady_clock` 记录从本次 `step()` 开始到安全命令写入 transport 的单调耗时；该值用于诊断，不作为控制时钟或协议字段。
 - `RuntimeCsvLogger` 在原有诊断字段基础上追加 `step_duration_us` 和三个累计 `transport_*` 字段；CSV 仍是诊断输出，不作为正式 CDC 输入。
 - `srm_auto_aim_app` 可按 `--debug-every` 保存检测和 `draw_tracking_debug()` 叠加到 `--debug-dir`，并按 `--summary` 写出稳定的 key=value 运行摘要。紫色框只表示本帧实际关联；青色模型标记仅在有效预测时绘制。目录创建、图像写入和摘要写入失败会报告错误。
-- CSV 当前52列，原前24列保留，后追加当前关联及旋转诊断28列；无当前观测时相关字段留空，不能用历史观测填充。完整字段、门限和配置见 [应用说明](application.md)。
+- CSV 当前56列，原前24列保留，后追加当前关联及旋转诊断28列，再追加 `guard_command_valid`、`guard_target_visible`、`fire_window_valid`、`guard_phase_error_rad` 四列；无当前观测时相关字段留空，不能用历史观测填充。完整字段、门限和配置见 [应用说明](application.md)。
 - 当前应用的 debug、CSV 和 summary 输出均可在 `--dry-run` 下使用；未启动 transport 时安全状态保持非开火，摘要中的 `nonzero_fire_request_count` 应为 0。
 - 运行统计只用于观测和交付准备，不会改变目标选择、预测、弹道补偿、安全状态机或正式 18 字节/30 字节 CDC 帧布局。真实相机、标定、CDC、云台和发射验证仍统一放在 `questions.md`。
 

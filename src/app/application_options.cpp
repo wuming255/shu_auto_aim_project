@@ -243,6 +243,42 @@ bool apply_vision_entry(ApplicationOptions & options, const std::string & key,
     for (const auto & entry : limits) {
       if (key == entry.first) { *entry.second = parse_double(value, context); return true; }
     }
+    if (key == "fixed_guard.relocalization_center_threshold_m") {
+      options.fixed_guard.relocalization_center_threshold_m = parse_double(value, context);
+      return true;
+    }
+    if (key == "fixed_guard.relocalization_radius_threshold_m") {
+      options.fixed_guard.relocalization_radius_threshold_m = parse_double(value, context);
+      return true;
+    }
+    if (key == "fixed_guard.relocalization_yaw_threshold_rad") {
+      options.fixed_guard.relocalization_yaw_threshold_rad = parse_double(value, context);
+      return true;
+    }
+    if (key == "fixed_guard.hit_window_half_width_rad") {
+      options.fixed_guard.hit_window_half_width_rad = parse_double(value, context);
+      return true;
+    }
+    if (key == "fixed_guard.max_hold_seconds") {
+      options.fixed_guard.max_hold_seconds = parse_double(value, context);
+      return true;
+    }
+    if (key == "safety.allow_visual_fire") {
+      options.safety.allow_visual_fire = parse_bool(value, context);
+      return true;
+    }
+    if (key == "safety.require_gimbal_feedback_for_fire") {
+      options.safety.require_gimbal_feedback_for_fire = parse_bool(value, context);
+      return true;
+    }
+    if (key == "safety.max_gimbal_error_deg") {
+      options.safety.max_gimbal_error_deg = parse_double(value, context);
+      return true;
+    }
+    if (key == "safety.min_gimbal_settle_ms") {
+      set_positive_duration(options.safety.min_gimbal_settle_time, value, context);
+      return true;
+    }
     return false;
   }
   return true;
@@ -272,6 +308,8 @@ void apply_config_entry(
     set_positive_duration(options.transport.io_timeout, value, context.c_str());
   } else if (key == "transport.reconnect_ms") {
     set_positive_duration(options.transport.reconnect_interval, value, context.c_str());
+  } else if (key == "transport.command_max_age_ms") {
+    set_positive_duration(options.transport.command_max_age, value, context.c_str());
   } else if (key == "runtime.dry_run") {
     options.dry_run = parse_bool(value, context.c_str());
   } else if (key == "runtime.log") {
@@ -337,7 +375,8 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   }
   if (options.transport.transmit_period <= std::chrono::milliseconds::zero() ||
       options.transport.io_timeout <= std::chrono::milliseconds::zero() ||
-      options.transport.reconnect_interval <= std::chrono::milliseconds::zero()) {
+      options.transport.reconnect_interval <= std::chrono::milliseconds::zero() ||
+      options.transport.command_max_age <= std::chrono::milliseconds::zero()) {
     throw std::invalid_argument("transport timeouts and period must be positive");
   }
   if (options.debug_every == 0) {
@@ -362,6 +401,8 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   }
   // 复用模型的参数约束，不加载相机、网络或串口。
   (void)vision::RotatingTarget(options.rotation);
+  (void)control::FixedGuardController(options.fixed_guard);
+  (void)control::SafetyController(options.safety);
   if (realtime && (options.start_paused || options.playback_fps != 0.0)) {
     throw std::invalid_argument("camera preview does not support --start-paused or --playback-fps");
   }
@@ -651,6 +692,12 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
         require_value(index, argc, argv, "--reconnect-ms"), "--reconnect-ms");
       continue;
     }
+    if (argument == "--command-max-age-ms") {
+      set_positive_duration(
+        options.transport.command_max_age,
+        require_value(index, argc, argv, "--command-max-age-ms"), "--command-max-age-ms");
+      continue;
+    }
 
     throw std::invalid_argument("unknown option: " + argument);
   }
@@ -716,6 +763,7 @@ std::string usage(const char * program_name)
     << "  --transmit-period-ms N      CDC transmit period (default: 10)\n"
     << "  --io-timeout-ms N           serial IO timeout (default: 20)\n"
     << "  --reconnect-ms N            reconnect interval (default: 100)\n"
+    << "  --command-max-age-ms N      expire stale commands to zero-safe output (default: 100)\n"
     << "  --help                      show this help\n";
   return stream.str();      // 把输入流中的内容转换为字符串返回
 }

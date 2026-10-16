@@ -35,6 +35,9 @@ struct TransportConfig
 
   // 设备未连接或通信异常后的重连间隔。
   std::chrono::milliseconds reconnect_interval{100};
+
+  // 命令超过该时间未被刷新时，读取和周期发送自动退回全零安全命令。
+  std::chrono::milliseconds command_max_age{100};
 };
 
 struct TimedIncomingState
@@ -106,6 +109,7 @@ private:
   mutable std::mutex serial_mutex_;
   mutable std::mutex command_mutex_;
   protocol::Command command_{};
+  std::chrono::steady_clock::time_point command_timestamp_{};
 
   mutable std::mutex state_mutex_;
   std::optional<protocol::IncomingState> latest_state_;

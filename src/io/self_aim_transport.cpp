@@ -36,6 +36,9 @@ SelfAimTransport::SelfAimTransport(TransportConfig config)
   if (config_.reconnect_interval <= std::chrono::milliseconds::zero()) {
     throw std::invalid_argument("transport reconnect interval must be positive");
   }
+  if (config_.command_max_age <= std::chrono::milliseconds::zero()) {
+    throw std::invalid_argument("transport command maximum age must be positive");
+  }
 
   serial_.setPort(config_.device);
   auto timeout = make_serial_timeout(config_.io_timeout);
@@ -112,11 +115,16 @@ void SelfAimTransport::set_command(const protocol::Command & command)
 {
   std::lock_guard<std::mutex> lock(command_mutex_);
   command_ = command;
+  command_timestamp_ = std::chrono::steady_clock::now();
 }
 
 protocol::Command SelfAimTransport::command() const
 {
   std::lock_guard<std::mutex> lock(command_mutex_);
+  if (command_timestamp_ == std::chrono::steady_clock::time_point{} ||
+      std::chrono::steady_clock::now() - command_timestamp_ > config_.command_max_age) {
+    return protocol::Command{};
+  }
   return command_;
 }
 

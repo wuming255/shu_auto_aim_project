@@ -52,6 +52,7 @@ srm::control::AutoAimPipelineConfig make_pipeline_config(
 {
   srm::control::AutoAimPipelineConfig config;
   config.rotation = options.rotation;
+  config.fixed_guard = options.fixed_guard;
   config.pose_solver.feature_size_m = options.feature_size_m;
   if (options.intrinsics_set) {
     config.pose_solver.camera_matrix = cv::Matx33d(
@@ -206,7 +207,7 @@ int main(int argc, const char * const argv[])
 
     srm::control::AutoAimRuntime runtime(                             // 一帧图像的总调度模块，安排各个模块的协作和数据流转
       frame_source, transport, srm::control::AutoAimPipeline(pipeline_config),        // 瞄准算法模块
-      srm::control::SafetyController(),                               // 安全控制模块
+      srm::control::SafetyController(options.safety),                 // 安全控制模块
       [&detector, &last_detection](const srm::io::Frame & frame) {    // 这个匿名函数输入一帧图像，返回检测结果
         last_detection = detector.detect(frame.bgr);
         return last_detection.value();                                // 注意这里传入的是整个匿名函数，使后面在类中可以被回调

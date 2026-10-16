@@ -104,7 +104,7 @@ build/srm_auto_aim_app \
 
 实时相机只有配置 `rotation.feedback_frame_confirmed=true` 后才使用反馈姿态；这表示使用者已经确认 x前/y左/z上、yaw左转、pitch抬头、roll绕x右手和反馈角度单位。runtime 从最多512条完整状态帧历史中选取不晚于图像主机读取时间且年龄不超过50 ms的最近反馈，不插值、不使用未来反馈。时间基准是主机接收/读取时间，不是硬件曝光同步。文件回放不使用当前串口反馈；确认录像来自固定相机后才可显式采用 `--static-camera`。
 
-应用默认旋转分支当前将瞄准结果标记为 `fixed_guard_not_configured`，因此尚不提供有效云台瞄准命令。固定守点、重定位、到点弹道及开火门控属于下一轮；`--no-rotation` 可对照原跟踪/瞄准基线，视觉开火仍默认关闭。
+旋转分支在通过轨道质量门后使用固定守点控制：首次锁存守点，中心、半径或视线变化超过阈值时重新定位；短暂丢失保留最后有效瞄准角但强制禁火，长丢失清除守点并重新捕获。弹道补偿使用下位机弹速和到点预测，开火还要求当前目标可见、命中窗口有效、视觉意图、云台反馈到位并稳定持续配置时长。`--no-rotation` 可对照原跟踪/瞄准基线，视觉开火仍默认关闭。
 
 叠加图中，绿色是检测候选，紫色粗四边形是 `tracking.current_observation` 的本帧实际关联；没有本帧关联时不画历史框。文字显示 track/rotation 状态、诊断或可靠标志、半径、相位、角速度和预测有效性。仅在有效预测时绘制青色四板模型位置和关联板 `+0.10 s` 圆圈；暂失时标注 `PREDICTION ONLY`。模型投影标记不是可见目标检测框。
 
@@ -275,6 +275,7 @@ camera.rotation_deg=0
 - `transport.transmit_period_ms`
 - `transport.io_timeout_ms`
 - `transport.reconnect_ms`
+- `transport.command_max_age_ms`
 - `runtime.dry_run`
 - `runtime.log`
 - `runtime.debug_dir`
@@ -310,6 +311,15 @@ camera.rotation_deg=0
 - `rotation.max_tilt_error_rad`
 - `rotation.max_angular_speed_rad_s`
 - `rotation.min_normal_span_rad`
+- `fixed_guard.relocalization_center_threshold_m`
+- `fixed_guard.relocalization_radius_threshold_m`
+- `fixed_guard.relocalization_yaw_threshold_rad`
+- `fixed_guard.hit_window_half_width_rad`
+- `fixed_guard.max_hold_seconds`
+- `safety.allow_visual_fire`
+- `safety.require_gimbal_feedback_for_fire`
+- `safety.max_gimbal_error_deg`
+- `safety.min_gimbal_settle_ms`
 - `camera.intrinsics`
 - `camera.calibration`
 - `camera.extrinsics`
@@ -362,6 +372,16 @@ rotation.max_phase_residual_rad=0.25
 rotation.max_tilt_error_rad=0.20
 rotation.max_angular_speed_rad_s=20
 rotation.min_normal_span_rad=0.15
+fixed_guard.relocalization_center_threshold_m=0.10
+fixed_guard.relocalization_radius_threshold_m=0.05
+fixed_guard.relocalization_yaw_threshold_rad=0.15
+fixed_guard.hit_window_half_width_rad=0.08
+fixed_guard.max_hold_seconds=0.15
+safety.allow_visual_fire=false
+safety.require_gimbal_feedback_for_fire=false
+safety.max_gimbal_error_deg=0.5
+safety.min_gimbal_settle_ms=50
+transport.command_max_age_ms=100
 ```
 
 配置文件先于命令行应用；同名命令行参数覆盖配置文件值。例如：
@@ -374,7 +394,7 @@ build/srm_auto_aim_app \
   --debug-every 10
 ```
 
-配置文件只负责运行参数，不包含协议字段、视觉开火许可或下位机固件配置；当前入口仍不会生成非零 `fire_flag`。
+配置文件只负责运行参数，不包含协议字段或下位机固件配置。`safety.allow_visual_fire` 只配置安全门；当前命令入口不提供视觉开火意图，因此仍不会生成非零 `fire_flag`。
 
 `camera.calibration` 和 `camera.extrinsics` 是 YAML 路径，空值表示未配置。`input.orientation_deg` 空值会报错，未确认旧文件方向时应省略该键；显式值必须为 0/90/180/270。用完整标定替换旧配置时，删除或注释 `camera.intrinsics`，不能仅追加 `--calibration` 而保留旧四参数。
 
@@ -452,7 +472,7 @@ rotation_associated_plate
 - `current_*` 只记录本帧实际关联；暂失或观测被拒时11列均留空，不写入历史观测。`current_detection_index` 是本帧检测下标，`current_label` 是模型内容类别，均不是永久目标编号；
 - `rotation_initialized` 只表示有数值拟合；判断可靠性和是否允许模型投影必须同时看 `rotation_reliable`、`rotation_prediction_valid` 及参考系等门限；
 - 未初始化时中心、半径、相位、角速度和两个残差共8列留空。`rotation_associated_plate` 是当前轨道内模4编号，重捕获后可能重新编号；
-- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败；缺失的帧和管线字段留空，所有行保持与表头一致的52列。时间诊断保留原前24列，当前关联和旋转诊断追加28列；分析脚本应按列名读取。
+- 输入 EOF 也会产生一行 `end_of_stream=1`，这用于区分正常回放结束和处理失败；缺失的帧和管线字段留空，所有行保持与表头一致的56列。时间诊断保留原前24列，当前关联和旋转诊断追加28列，固定守点诊断再追加4列；分析脚本应按列名读取。
 
 CSV 记录用于离线诊断，不应直接作为下位机协议输入。
 
@@ -517,5 +537,6 @@ summary 对下列每个阶段输出 `<stage>_sample_count`、`total_<stage>_dura
 - 程序默认关闭视觉开火，当前命令入口没有启用视觉开火意图；默认和异常路径的 `fire_flag` 都为 0。
 - `--dry-run` 不打开 CDC 设备；`--live` 在完整内外参校验后启动传输线程，按照正式 18 字节 CDC 命令发送，仍保持 `fire_flag=0`。
 - 图片/视频 EOF、MVS 读帧失败、停止信号和正常退出前会尝试发送安全命令，然后停止传输线程。
+- transport 命令超过 `transport.command_max_age_ms` 未刷新时，读取和周期发送均退回全零安全命令；该过期保护不改变正式 CDC 帧布局。
 - 日志、debug 图像、录像或摘要写入失败会使程序报告错误；传输对象通过析构路径停止后台线程，不把异常留成运行中的收发线程。窗口与同步录像均限定为 dry-run。
 - 真实设备、云台和发射测试不由本入口自动获得许可，必须按照根目录 `questions.md` 执行。

@@ -12,7 +12,8 @@ AutoAimPipeline::AutoAimPipeline(AutoAimPipelineConfig config)
   target_selector_(config_.target_selector),
   target_tracker_(config_.tracker),
   aim_compensator_(config_.aim_compensator),
-  rotating_target_(config_.rotation,config_.pose_solver)
+  rotating_target_(config_.rotation,config_.pose_solver),
+  fixed_guard_(config_.fixed_guard)
 {
 }
 
@@ -69,11 +70,15 @@ AutoAimFrameResult AutoAimPipeline::process(
     result.rotation.status = "disabled";
     result.tracking = target_tracker_.update(result.selection, timestamp);
   }
-  result.aim = aim_compensator_.solve(result.tracking, bullet_speed_m_s);
   if (config_.rotation.enabled) {
-    // 四甲不能套用旧视线匀速外推；固定守点/到点弹道由下一层专门求解。
-    result.aim.valid = false;
-    result.aim.error = "fixed_guard_not_configured";
+    result.fixed_guard = fixed_guard_.update(
+      result.rotation, aim_compensator_, bullet_speed_m_s, timestamp);
+    result.aim = result.fixed_guard.aim;
+    result.guard_command_valid = result.fixed_guard.guard_locked && result.aim.valid;
+    result.guard_target_visible = result.fixed_guard.target_visible;
+    result.fire_window_valid = result.fixed_guard.fire_window_valid;
+  } else {
+    result.aim = aim_compensator_.solve(result.tracking, bullet_speed_m_s);
   }
   return result;
 }
@@ -82,6 +87,7 @@ void AutoAimPipeline::reset() noexcept
 {
   target_tracker_.reset();
   rotating_target_.reset();
+  fixed_guard_.reset();
   rotation_last_observation_.reset();
 }
 

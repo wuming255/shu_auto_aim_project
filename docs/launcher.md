@@ -129,7 +129,7 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 
 默认分类器替代旧中央图案检查，类别只提供内容证据，不代表物理唯一身份。只传 `--no-center-pattern` 不会关闭分类；需要对照纯几何基线时使用 `--no-classifier --no-center-pattern`，此时可能重新出现空隙误配。流程、对照方法和模型适用限制见 [传统检测说明](traditional_detector.md)。
 
-叠加图的紫色粗框只表示本帧实际关联，没有当前观测时不画历史框。可靠旋转预测还要求显式确认特征尺寸、安装倾角和固定参考系；默认旋转分支目前返回 `fixed_guard_not_configured`，尚不提供有效云台瞄准命令。旋转质量门限、反馈历史及52列CSV说明见 [运行入口说明](application.md#四甲旋转诊断与实际关联)。
+叠加图的紫色粗框只表示本帧实际关联，没有当前观测时不画历史框。可靠旋转预测还要求显式确认特征尺寸、安装倾角和固定参考系；通过质量门后，固定守点会锁存并在明显变化时重新定位，短暂丢失只保持瞄准且禁止开火，长丢失清除守点。命中窗口、云台到位稳定和命令过期保护均在安全层执行。旋转质量门限、反馈历史及56列CSV说明见 [运行入口说明](application.md#四甲旋转诊断与实际关联)。
 
 `build/srm_calibrate_camera` 是独立的离线标定入口，不通过脚本模式启动。先实测板型、内角点行列和方格尺寸，再按 [标定说明](calibration.md) 处理图片目录或视频。相机与文件方向分开设置；方向在输入层生效，检测、预览和录像保持一致。新录像自动携带已存方向，回放通常无需再旋转。
 
@@ -166,6 +166,7 @@ bash run.sh video --config my-settings.conf --source "my videos/test.avi"
 | `--transmit-period-ms N` | `transport.transmit_period_ms` | 发送周期，默认 10 ms |
 | `--io-timeout-ms N` | `transport.io_timeout_ms` | 串口 I/O 超时，默认 20 ms |
 | `--reconnect-ms N` | `transport.reconnect_ms` | CDC 重连间隔，默认 100 ms |
+| `--command-max-age-ms N` | `transport.command_max_age_ms` | 命令未刷新时退回全零安全命令，默认 100 ms |
 
 重复使用默认输出位置会覆盖 CSV/摘要及同名图像，旧的其他图像不会自动删除。需要保留一次结果时，使用不同批次目录；应用先创建 debug 目录，因此下例日志父目录也会存在：
 

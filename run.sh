@@ -28,7 +28,7 @@ usage() {
   bash run.sh mvs --show-debug --record replay_debug/session-01.avi
   bash run.sh --config my-settings.conf
 
-默认配置：项目根目录 run.conf（离线视频、dry-run、最多 120 帧）。
+默认配置：项目根目录 run.conf（离线视频、dry-run、运行到 EOF）。
 --config PATH 替换默认配置；末尾应用参数覆盖配置和模式预设。
 所有相对路径均相对于项目根目录，含空格路径请加引号。
 默认输出 replay_debug/latest/，重复运行会覆盖同名文件。

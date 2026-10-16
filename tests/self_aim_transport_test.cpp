@@ -250,11 +250,33 @@ void test_device_can_appear_after_start()
   ::unlink(link_path.c_str());
 }
 
+void test_command_expiry_returns_safe_command()
+{
+  PtyPair pty;
+  auto config = test_config(pty.slave_path());
+  config.command_max_age = 20ms;
+  SelfAimTransport transport(config);
+
+  srm::protocol::Command command{};
+  command.gimbal.yaw = 1.0F;
+  command.gimbal.pitch = -2.0F;
+  command.fire.fire_flag = 1;
+  transport.set_command(command);
+  assert(transport.command().fire.fire_flag == 1);
+
+  std::this_thread::sleep_for(40ms);
+  const auto expired = transport.command();
+  assert(expired.fire.fire_flag == 0);
+  assert(expired.gimbal.yaw == 0.0F);
+  assert(expired.gimbal.pitch == 0.0F);
+}
+
 }  // namespace
 
 int main()
 {
   test_pty_round_trip_and_safe_default();
   test_device_can_appear_after_start();
+  test_command_expiry_returns_safe_command();
   return 0;
 }

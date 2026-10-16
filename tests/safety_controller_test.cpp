@@ -226,6 +226,50 @@ void test_target_aim_and_bullet_guards()
   }
 }
 
+void test_gimbal_settling_and_visible_fire_window()
+{
+  AutoAimFrameResult pipeline_result;
+  IncomingState transport_state;
+  const auto now = Clock::now();
+  auto input = valid_input(pipeline_result, transport_state, now);
+  pipeline_result.guard_command_valid = true;
+  pipeline_result.guard_target_visible = true;
+  pipeline_result.fire_window_valid = true;
+  input.visual_fire_intent = true;
+
+  SafetyControllerConfig config;
+  config.allow_visual_fire = true;
+  config.require_gimbal_feedback_for_fire = true;
+  config.max_gimbal_error_deg = 0.5;
+  config.min_gimbal_settle_time = std::chrono::milliseconds(50);
+  transport_state.gimbal.yaw = 12.5F;
+  transport_state.gimbal.pitch = -3.25F;
+  input.transport_state = transport_state;
+  input.transport_state_timestamp = now;
+  SafetyController controller(config);
+
+  const auto settling = controller.decide(input);
+  assert(settling.state == SafetyState::aiming);
+  assert(!settling.fire_allowed);
+  assert(has_reason(settling, SafetyReason::gimbal_not_settled));
+
+  input.now = now + std::chrono::milliseconds(60);
+  input.frame_timestamp = input.now;
+  input.transport_state_timestamp = input.now;
+  const auto ready = controller.decide(input);
+  assert(ready.state == SafetyState::fire_ready);
+  assert(ready.fire_allowed);
+  assert(ready.command.fire.fire_flag == 1);
+
+  pipeline_result.guard_target_visible = false;
+  const auto temporarily_lost = controller.decide(input);
+  assert(temporarily_lost.state == SafetyState::aiming);
+  assert(temporarily_lost.aim_command_valid);
+  assert(!temporarily_lost.fire_allowed);
+  assert(temporarily_lost.command.fire.fire_flag == 0);
+  assert(has_reason(temporarily_lost, SafetyReason::target_not_visible));
+}
+
 }  // namespace
 
 int main()
@@ -235,5 +279,6 @@ int main()
   test_transport_lifecycle_and_state_guards();
   test_frame_and_processing_guards();
   test_target_aim_and_bullet_guards();
+  test_gimbal_settling_and_visible_fire_window();
   return 0;
 }

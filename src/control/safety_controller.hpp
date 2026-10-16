@@ -36,6 +36,11 @@ enum class SafetyReason
   aim_invalid,
   bullet_speed_invalid,
   fire_disabled,
+  target_not_visible,
+  fire_window_invalid,
+  gimbal_feedback_missing,
+  gimbal_feedback_stale,
+  gimbal_not_settled,
 };
 
 const char * to_string(SafetyReason reason) noexcept;
@@ -51,6 +56,11 @@ struct SafetyControllerConfig
 
   // 默认关闭视觉开火。即使打开，也仍需调用方显式提供 visual_fire_intent。
   bool allow_visual_fire = false;
+
+  // 只有明确启用时，才用正式状态帧中的 yaw/pitch 反馈作为开火到位门。
+  bool require_gimbal_feedback_for_fire = false;
+  double max_gimbal_error_deg = 0.5;
+  std::chrono::milliseconds min_gimbal_settle_time{50};
 };
 
 struct SafetyInput
@@ -103,6 +113,7 @@ private:
   static bool has_reason(const SafetyOutput & output, SafetyReason reason) noexcept;
 
   SafetyControllerConfig config_;
+  mutable std::optional<std::chrono::steady_clock::time_point> gimbal_settle_start_;
 };
 
 }  // namespace srm::control

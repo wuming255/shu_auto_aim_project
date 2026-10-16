@@ -6,6 +6,8 @@
 
 #include "io/frame_source.hpp"
 #include "io/self_aim_transport.hpp"
+#include "control/fixed_guard.hpp"
+#include "control/safety_controller.hpp"
 #include "vision/rotating_target.hpp"
 
 namespace srm::app
@@ -24,6 +26,8 @@ struct ApplicationOptions
   bool require_center_pattern = true;  // 中央亮图案检查；无此标记的靶板可显式关闭。
   vision::NumberClassifierConfig classifier;
   vision::RotatingTargetConfig rotation;
+  control::FixedGuardConfig fixed_guard;
+  control::SafetyControllerConfig safety;
   std::optional<cv::Size2d> feature_size_m;  // 灯条端点矩形实测值；空值表示未确认。
   std::string config_path;
   std::string log_path;

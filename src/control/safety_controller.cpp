@@ -62,6 +62,16 @@ const char * to_string(SafetyReason reason) noexcept
       return "bullet_speed_invalid";
     case SafetyReason::fire_disabled:
       return "fire_disabled";
+    case SafetyReason::target_not_visible:
+      return "target_not_visible";
+    case SafetyReason::fire_window_invalid:
+      return "fire_window_invalid";
+    case SafetyReason::gimbal_feedback_missing:
+      return "gimbal_feedback_missing";
+    case SafetyReason::gimbal_feedback_stale:
+      return "gimbal_feedback_stale";
+    case SafetyReason::gimbal_not_settled:
+      return "gimbal_not_settled";
     default:
       return "unknown";
   }
@@ -121,8 +131,16 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   if (pipeline == nullptr) {
     add_reason(output, SafetyReason::target_unavailable);
   } else {
-    if (pipeline->tracking.state != vision::TargetTrackState::tracking) {
+    const bool guard_hold = pipeline->guard_command_valid &&
+      pipeline->tracking.state == vision::TargetTrackState::temporarily_lost;
+    if (pipeline->tracking.state != vision::TargetTrackState::tracking && !guard_hold) {
       add_reason(output, SafetyReason::target_unavailable);
+    }
+    if (pipeline->guard_command_valid && !pipeline->guard_target_visible) {
+      add_reason(output, SafetyReason::target_not_visible);
+    }
+    if (pipeline->guard_command_valid && !pipeline->fire_window_valid) {
+      add_reason(output, SafetyReason::fire_window_invalid);
     }
     if (!pipeline->aim.valid) add_reason(output, SafetyReason::aim_invalid);
     if (
@@ -140,7 +158,16 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     pipeline->aim.bullet_speed_m_s >= config_.min_bullet_speed_m_s &&
     pipeline->aim.bullet_speed_m_s <= config_.max_bullet_speed_m_s;
 
-  if (aim_valid) {
+  const bool guard_hold_aim_valid =
+    base_inputs_valid && pipeline != nullptr && pipeline->guard_command_valid &&
+    pipeline->tracking.state == vision::TargetTrackState::temporarily_lost &&
+    pipeline->aim.valid && finite(pipeline->aim.yaw_deg) && finite(pipeline->aim.pitch_deg) &&
+    finite(pipeline->aim.bullet_speed_m_s) &&
+    pipeline->aim.bullet_speed_m_s >= config_.min_bullet_speed_m_s &&
+    pipeline->aim.bullet_speed_m_s <= config_.max_bullet_speed_m_s;
+  const bool command_aim_valid = aim_valid || guard_hold_aim_valid;
+
+  if (command_aim_valid) {
     const float yaw = static_cast<float>(pipeline->aim.yaw_deg);
     const float pitch = static_cast<float>(pipeline->aim.pitch_deg);
     if (std::isfinite(yaw) && std::isfinite(pitch)) {
@@ -151,16 +178,61 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     }
   }
 
+  bool gimbal_settled = true;
+  if (config_.require_gimbal_feedback_for_fire) {
+    if (!input.transport_state.has_value()) {
+      add_reason(output, SafetyReason::gimbal_feedback_missing);
+      gimbal_settled = false;
+      gimbal_settle_start_.reset();
+    } else if (!input.transport_state_timestamp.has_value()) {
+      add_reason(output, SafetyReason::gimbal_feedback_missing);
+      gimbal_settled = false;
+      gimbal_settle_start_.reset();
+    } else if (!timestamp_fresh(
+      input.now, *input.transport_state_timestamp, config_.max_transport_state_age)) {
+      add_reason(output, SafetyReason::gimbal_feedback_stale);
+      gimbal_settled = false;
+      gimbal_settle_start_.reset();
+    } else if (!output.aim_command_valid || !finite(input.transport_state->gimbal.yaw) ||
+               !finite(input.transport_state->gimbal.pitch)) {
+      add_reason(output, SafetyReason::gimbal_not_settled);
+      gimbal_settled = false;
+      gimbal_settle_start_.reset();
+    } else {
+      const double yaw_error =
+        std::abs(static_cast<double>(input.transport_state->gimbal.yaw) -
+                 static_cast<double>(output.command.gimbal.yaw));
+      const double pitch_error =
+        std::abs(static_cast<double>(input.transport_state->gimbal.pitch) -
+                 static_cast<double>(output.command.gimbal.pitch));
+      if (!finite(yaw_error) || !finite(pitch_error) ||
+          yaw_error > config_.max_gimbal_error_deg || pitch_error > config_.max_gimbal_error_deg) {
+        add_reason(output, SafetyReason::gimbal_not_settled);
+        gimbal_settled = false;
+        gimbal_settle_start_.reset();
+      } else {
+        if (!gimbal_settle_start_.has_value()) gimbal_settle_start_ = input.now;
+        const auto settled_for = input.now - *gimbal_settle_start_;
+        gimbal_settled = settled_for >= config_.min_gimbal_settle_time;
+        if (!gimbal_settled) add_reason(output, SafetyReason::gimbal_not_settled);
+      }
+    }
+  } else {
+    gimbal_settle_start_.reset();
+  }
+
+  const bool guard_fire_conditions = pipeline == nullptr || !pipeline->guard_command_valid ||
+    (pipeline->guard_target_visible && pipeline->fire_window_valid);
   const bool fire_gate =
-    aim_valid && output.aim_command_valid && config_.allow_visual_fire &&
-    input.visual_fire_intent;
+    command_aim_valid && output.aim_command_valid && config_.allow_visual_fire &&
+    input.visual_fire_intent && gimbal_settled && guard_fire_conditions;
   if (fire_gate) {
     output.command.fire.fire_flag = 1;
     output.fire_allowed = true;
     output.state = SafetyState::fire_ready;
   } else {
     output.command.fire.fire_flag = 0;
-    if (aim_valid && output.aim_command_valid) {
+    if (command_aim_valid && output.aim_command_valid) {
       output.state = SafetyState::aiming;
     } else {
       output.state = SafetyState::safe;
@@ -207,6 +279,10 @@ void SafetyController::validate_config(const SafetyControllerConfig & config)
       !finite(config.max_bullet_speed_m_s) ||
       config.max_bullet_speed_m_s < config.min_bullet_speed_m_s) {
     throw std::invalid_argument("invalid safety bullet speed range");
+  }
+  if (!finite(config.max_gimbal_error_deg) || config.max_gimbal_error_deg <= 0.0 ||
+      config.min_gimbal_settle_time <= std::chrono::milliseconds::zero()) {
+    throw std::invalid_argument("invalid gimbal settling configuration");
   }
 }
 
