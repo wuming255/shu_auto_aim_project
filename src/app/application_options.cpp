@@ -216,6 +216,12 @@ bool apply_vision_entry(ApplicationOptions & options, const std::string & key,
   else if (key == "detector.classifier.labels") classifier.label_path = value;
   else if (key == "detector.classifier.min_confidence") classifier.min_confidence = parse_double(value, context);
   else if (key == "detector.classifier.conflict_margin") classifier.conflict_margin = parse_double(value, context);
+  else if (key == "detector.brightness_method") {
+    if (value == "grayscale") options.brightness_method = vision::BrightnessMethod::grayscale;
+    else if (value == "max_channel") options.brightness_method = vision::BrightnessMethod::max_channel;
+    else throw std::invalid_argument(std::string(context) + " must be max_channel or grayscale");
+  }
+  else if (key == "detector.brightness_threshold") options.brightness_threshold = parse_double(value, context);
   else if (key == "pose.feature_width_m" || key == "pose.feature_height_m") {
     if (!options.feature_size_m) options.feature_size_m = cv::Size2d{};
     const auto parsed = parse_double(value, context);
@@ -387,9 +393,6 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   if (options.debug_every == 0) {
     throw std::invalid_argument("debug frame interval must be positive");
   }
-  if (options.show_debug && !options.dry_run) {
-    throw std::invalid_argument("--show-debug requires --dry-run");
-  }
   const bool realtime = type == io::FrameSourceType::opencv_camera || type == io::FrameSourceType::mvs_camera;
   if (options.rotation.assume_static_camera && (realtime || !options.dry_run)) {
     throw std::invalid_argument("static camera assumption requires dry-run image/video input");
@@ -398,6 +401,10 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
     throw std::invalid_argument("feature width and height must both be positive measured dimensions");
   }
   const auto & classifier = options.classifier;
+  if (!std::isfinite(options.brightness_threshold) || options.brightness_threshold < 0.0 ||
+      options.brightness_threshold > 255.0) {
+    throw std::invalid_argument("brightness threshold must be within [0, 255]");
+  }
   if (!std::isfinite(classifier.min_confidence) || classifier.min_confidence <= 0.5 ||
       classifier.min_confidence > 1 || !std::isfinite(classifier.conflict_margin) ||
       classifier.conflict_margin < 0 || classifier.conflict_margin > 1 ||
@@ -408,8 +415,8 @@ void validate_options(const ApplicationOptions & options)     // 配置参数合
   (void)vision::RotatingTarget(options.rotation);
   (void)control::FixedGuardController(options.fixed_guard);
   (void)control::SafetyController(options.safety);
-  if (realtime && (options.start_paused || options.playback_fps != 0.0)) {
-    throw std::invalid_argument("camera preview does not support --start-paused or --playback-fps");
+  if ((!options.dry_run || realtime) && (options.start_paused || options.playback_fps != 0.0)) {
+    throw std::invalid_argument("live/camera preview does not support --start-paused or --playback-fps");
   }
   if (!options.show_debug && (options.start_paused || options.playback_fps != 0.0)) {
     throw std::invalid_argument("--start-paused and --playback-fps require --show-debug");
@@ -574,6 +581,8 @@ ApplicationOptions parse_arguments(int argc, const char * const argv[])   // 将
       continue;
     }
     const std::pair<const char *, const char *> vision_options[] = {
+      {"--brightness-method", "detector.brightness_method"},
+      {"--brightness-threshold", "detector.brightness_threshold"},
       {"--classifier-model", "detector.classifier.model"},
       {"--classifier-labels", "detector.classifier.labels"},
       {"--classifier-confidence", "detector.classifier.min_confidence"},
@@ -749,6 +758,8 @@ std::string usage(const char * program_name)
     << "  --summary PATH              write key=value replay summary\n"
     << "  --debug-dir PATH            save detection, association and rotation debug images\n"
     << "  --debug-every N             save every Nth frame (default: 1)\n"
+    << "  --brightness-method METHOD  max_channel (default) or BGR grayscale\n"
+    << "  --brightness-threshold N    brightness cutoff in [0,255] (default: 150)\n"
     << "  --require-center-pattern/--no-center-pattern  central bright marking check (default: on)\n"
     << "  --classifier/--no-classifier  ONNX content evidence (default: on; replaces bright marking gate)\n"
     << "  --classifier-model PATH     ONNX model (default: bundled armor_number/mlp.onnx)\n"
@@ -757,11 +768,12 @@ std::string usage(const char * program_name)
     << "  --rotation/--no-rotation    independent four-plate estimator (default: on)\n"
     << "  --follow-target/--no-follow-target  non-firing current-target follow; bypass rotation lock\n"
     << "  --fixed-bullet-speed MPS|referee  temporary speed override; forces fire_flag=0\n"
+    << "                             referee uses feedback; zero/missing speed defaults to 22 m/s\n"
     << "  --feature-size W,H          measured light endpoint width,height in metres\n"
     << "  --static-camera/--no-static-camera  explicit fixed camera assumption (dry-run files only)\n"
     << "  --rotation-tilt RAD|unknown  measured mounting tilt; unknown=estimate with quality gates\n"
-    << "  --show-debug/--no-show-debug  dry-run windows; camera preview has no pause/pacing\n"
-    << "  --playback-fps FPS          window playback rate; 0=source or 30 (default)\n"
+    << "  --show-debug/--no-show-debug  show debug windows in dry-run/live; live/camera has no pause/pacing\n"
+    << "  --playback-fps FPS          dry-run file playback rate; 0=source or 30 (default)\n"
     << "                             nonzero FPS must be within [0.1, 1000]\n"
     << "  --start-paused/--no-start-paused  pause on the first displayed frame\n"
     << "                             keys: Space=pause, n=step, q/Esc=quit\n"

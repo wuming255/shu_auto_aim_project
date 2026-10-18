@@ -22,9 +22,16 @@ enum class LightColor
 
 const char * to_string(LightColor color) noexcept;
 
+enum class BrightnessMethod
+{
+  max_channel,
+  grayscale,
+};
+
 struct TraditionalDetectorConfig        // 检测器配置文件
 {
-  // 对 BGR 三个通道的最大值做阈值，避免纯红/纯蓝灯条被灰度化后亮度过低。
+  // 灰度法可分离有高亮核心的灯条与彩色光晕；最大通道法保留暗的纯色灯条。
+  BrightnessMethod brightness_method = BrightnessMethod::max_channel;
   double brightness_threshold = 150.0;
 
   // 以下几何参数与参考项目传统检测器的含义保持一致，角度单位为度。

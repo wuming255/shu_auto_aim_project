@@ -9,6 +9,7 @@
 #include "control/fixed_guard.hpp"
 #include "control/safety_controller.hpp"
 #include "vision/rotating_target.hpp"
+#include "vision/traditional_detector.hpp"
 
 namespace srm::app
 {
@@ -24,6 +25,8 @@ struct ApplicationOptions
   bool list_cameras = false;  // 枚举 MVS USB 设备后退出，不打开相机/CDC。
   bool camera_info = false;   // 打开 MVS 相机并查询节点后退出，不修改节点/取流/CDC。
   bool require_center_pattern = true;  // 中央亮图案检查；无此标记的靶板可显式关闭。
+  vision::BrightnessMethod brightness_method = vision::BrightnessMethod::max_channel;
+  double brightness_threshold = 150.0;
   vision::NumberClassifierConfig classifier;
   vision::RotatingTargetConfig rotation;
   control::FixedGuardConfig fixed_guard;
@@ -37,7 +40,7 @@ struct ApplicationOptions
   std::size_t max_frames = 0;  // 最大处理帧数，0 表示直到 EOF 或收到停止信号。
   std::size_t debug_every = 1;  // 每隔多少帧保存一张 debug 图像。
 
-  // 窗口仅用于 dry-run；相机预览不暂停、不按 playback_fps 限速。
+  // dry-run/live 均可显示；live 或相机预览不暂停、不按 playback_fps 限速。
   bool show_debug = false;
   bool start_paused = false;
   double playback_fps = 0.0;  // 0 使用视频名义帧率，不可用时回退到 30 FPS。

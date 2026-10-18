@@ -61,6 +61,10 @@ const char * to_string(LightColor color) noexcept
 
 TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : config_(config)    // 构造函数加载配置
 {
+  if (config_.brightness_method != BrightnessMethod::max_channel &&
+      config_.brightness_method != BrightnessMethod::grayscale) {
+    throw std::invalid_argument("unsupported brightness method");
+  }
   if (!finite_non_negative(config_.brightness_threshold) || config_.brightness_threshold > 255.0) {
     throw std::invalid_argument("brightness threshold must be within [0, 255]");
   }
@@ -103,11 +107,16 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
     throw std::invalid_argument("traditional detector expects an 8-bit BGR image");
   }
 
-  // 参考项目使用灰度阈值。本实现改用三个 BGR 通道的最大值，保留红/蓝灯条的高亮信息。
-  std::vector<cv::Mat> channels;        // 几个容器用来放拆分的图像
-  cv::split(bgr_image, channels);       // 拆分通道放到容器中
-  cv::Mat brightness = cv::max(channels[0], channels[1]);
-  brightness = cv::max(brightness, channels[2]);      // 每个像素取三通道中的最大值
+  cv::Mat brightness;
+  if (config_.brightness_method == BrightnessMethod::grayscale) {
+    // BGR 灰度可排除彩色光晕，避免其与高亮灯条粘连后破坏轮廓形状。
+    cv::cvtColor(bgr_image, brightness, cv::COLOR_BGR2GRAY);
+  } else {
+    std::vector<cv::Mat> channels;
+    cv::split(bgr_image, channels);
+    brightness = cv::max(channels[0], channels[1]);
+    brightness = cv::max(brightness, channels[2]);
+  }
 
   DetectionResult result;   
   cv::threshold(    // 获取二值图

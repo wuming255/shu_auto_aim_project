@@ -13,6 +13,8 @@
 namespace srm::control
 {
 
+inline constexpr double kDefaultBulletSpeedMps = 22.0;
+
 enum class SafetyState
 {
   safe,
@@ -101,6 +103,9 @@ public:
   explicit SafetyController(SafetyControllerConfig config = {});
 
   SafetyOutput decide(const SafetyInput & input) const;
+
+  // 未发射时反馈0是正常状态；解算和命令检查共用默认弹速，原始反馈不改写。
+  double effective_bullet_speed(double reported_speed_m_s) const noexcept;
 
   const SafetyControllerConfig & config() const noexcept;
 

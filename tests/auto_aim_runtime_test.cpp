@@ -278,7 +278,8 @@ void test_runtime_closed_loop_and_safety_fallback()
     std::chrono::steady_clock::now() + 1s));
   assert(is_non_firing_frame(frame));
 
-  pty.write_all(make_incoming_frame(20.0F));
+  // 未发射时的正常零值应使用默认22 m/s，仍能输出并发送瞄准命令。
+  pty.write_all(make_incoming_frame(0.0F));
   const auto state_deadline = std::chrono::steady_clock::now() + 1s;
   while (transport.received_frame_count() == 0 && std::chrono::steady_clock::now() < state_deadline) {
     std::this_thread::sleep_for(1ms);
@@ -314,6 +315,9 @@ void test_runtime_closed_loop_and_safety_fallback()
   assert(aimed.pipeline.has_value());
   assert(aimed.pipeline->tracking.state == TargetTrackState::tracking);
   assert(aimed.pipeline->aim.valid);
+  assert(aimed.pipeline->aim.bullet_speed_m_s == 22.0);
+  assert(aimed.feedback && aimed.feedback->state.shoot.bullet_speed == 0.0F);
+  assert(!aimed.bullet_speed_overridden);
   assert(aimed.safety.state == srm::control::SafetyState::aiming);
   assert(aimed.safety.aim_command_valid);
   assert(aimed.safety.command.fire.fire_flag == 0);
@@ -342,6 +346,21 @@ void test_runtime_closed_loop_and_safety_fallback()
     if (reason == srm::control::SafetyReason::transport_state_stale) saw_stale_reason = true;
   }
   assert(saw_stale_reason);
+
+  // 发射后收到有效实测值，立即用于解算，不继续写死22。
+  const auto before = transport.received_frame_count();
+  pty.write_all(make_incoming_frame(30.0F));
+  const auto measured_deadline = std::chrono::steady_clock::now() + 1s;
+  while (transport.received_frame_count() == before && std::chrono::steady_clock::now() < measured_deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  assert(transport.received_frame_count() > before);
+  const auto measured = runtime.step();
+  assert(measured.pipeline && measured.pipeline->aim.bullet_speed_m_s == 30.0);
+  assert(measured.feedback && measured.feedback->state.shoot.bullet_speed == 30.0F);
+  assert(measured.safety.aim_command_valid && measured.safety.command.fire.fire_flag == 0);
+  assert(wait_for_matching_command(
+    pty, measured.safety.command.gimbal.yaw, measured.safety.command.gimbal.pitch, 1s));
 
   transport.stop();
   assert(!transport.running());

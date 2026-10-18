@@ -44,8 +44,8 @@ NumberClassification NumberClassifier::classify(
   const auto transform = cv::getPerspectiveTransform(armor.points.data(), destination.data());
   cv::Mat warped, gray, binary, normalized;
   cv::warpPerspective(bgr, warped, transform, {width,28});
-  // 上游以 RGB2GRAY 处理输入；保留其模型预处理约定，灯条在中央 ROI 外。
-  cv::cvtColor(warped(cv::Rect((width-20)/2,0,20,28)), gray, cv::COLOR_RGB2GRAY);
+  // 上游 ROS 输入已转成 RGB；本项目输入始终为 BGR，须使用对应的灰度权重。
+  cv::cvtColor(warped(cv::Rect((width-20)/2,0,20,28)), gray, cv::COLOR_BGR2GRAY);
   cv::threshold(gray, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
   binary.convertTo(normalized, CV_32F, 1.0/255.0);
   net_.setInput(cv::dnn::blobFromImage(normalized));

@@ -84,8 +84,10 @@ void test_debug_window_validation()
 {
   // 交互不能暂停实时控制；无窗口时也不能静默忽略播放参数。
   const std::vector<std::vector<std::string>> invalid_arguments{
-    {"--input", "video", "--source", "x.avi", "--show-debug"},
-    {"--input", "camera", "--live", "--show-debug"},
+    {"--input", "video", "--source", "x.avi", "--live", "--show-debug", "--start-paused"},
+    {"--input", "image", "--source", "x.png", "--live", "--show-debug", "--playback-fps", "30"},
+    {"--input", "mvs", "--live", "--show-debug", "--start-paused"},
+    {"--input", "camera", "--live", "--show-debug", "--playback-fps", "30"},
     {"--input", "mvs", "--dry-run", "--show-debug", "--start-paused"},
     {"--input", "camera", "--dry-run", "--show-debug", "--playback-fps", "30"},
     {"--start-paused"},
@@ -111,6 +113,12 @@ void test_debug_window_validation()
     const auto realtime = parse({"--input", type, "--dry-run", "--show-debug"});
     assert(realtime.show_debug && !realtime.start_paused && realtime.playback_fps == 0.0);
   }
+  for (const auto * type : {"mvs", "camera", "image", "video"}) {
+    const auto live = parse({"--input", type, "--source", "input", "--live", "--show-debug"});
+    assert(live.show_debug && !live.dry_run && !live.start_paused && live.playback_fps == 0.0);
+  }
+  const auto no_window = parse({"--input", "mvs", "--live", "--show-debug", "--no-show-debug"});
+  assert(!no_window.show_debug && !no_window.dry_run);
 }
 
 void test_command_line_validation()
@@ -175,7 +183,6 @@ void test_mvs_options()
   assert(parse({"--camera-info", "--mvs-index", "0"}).camera_info);
 
   const std::vector<std::vector<std::string>> invalid{
-    {"--input", "mvs", "--live", "--show-debug"},
     {"--mvs-serial", "A", "--mvs-index", "0"}, {"--mvs-index", "-2"},
     {"--camera-timeout-ms", "0"}, {"--camera-timeout-ms", "10001"},
     {"--exposure-us", "0"}, {"--gain", "-1"}, {"--exposure-us", "nan"},
@@ -295,6 +302,43 @@ void test_classifier_and_rotation_options()
   for (const auto & args : invalid) {
     bool rejected = false;
     try { (void)parse_dynamic(args); } catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+  ::unlink(path.c_str());
+}
+
+void test_brightness_options()
+{
+  using srm::vision::BrightnessMethod;
+  const auto path = "/tmp/shu_brightness_config_" + std::to_string(::getpid()) + ".conf";
+  {
+    std::ofstream out(path);
+    out << "detector.brightness_method=grayscale\ndetector.brightness_threshold=160\n";
+  }
+  const auto configured = parse_dynamic({"--config", path});
+  assert(configured.brightness_method == BrightnessMethod::grayscale);
+  assert(configured.brightness_threshold == 160);
+  const auto overridden = parse_dynamic({"--config", path, "--brightness-method", "max_channel",
+                                         "--brightness-threshold", "151.5"});
+  assert(overridden.brightness_method == BrightnessMethod::max_channel);
+  assert(overridden.brightness_threshold == 151.5);
+  for (const auto * value : {"0", "255"}) {
+    (void)parse_dynamic({"--brightness-method", "grayscale", "--brightness-threshold", value});
+  }
+  for (const auto & args : std::vector<std::vector<std::string>>{
+         {"--brightness-method", "rgb"}, {"--brightness-method", ""},
+         {"--brightness-threshold", "-1"}, {"--brightness-threshold", "256"},
+         {"--brightness-threshold", "nan"}, {"--brightness-threshold", "inf"}}) {
+    bool rejected = false;
+    try { (void)parse_dynamic(args); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+  for (const auto * entry : {"detector.brightness_method=invalid\n", "detector.brightness_threshold=-1\n"}) {
+    { std::ofstream out(path); out << entry; }
+    bool rejected = false;
+    try { (void)parse_dynamic({"--config", path}); }
+    catch (const std::invalid_argument &) { rejected = true; }
     assert(rejected);
   }
   ::unlink(path.c_str());
@@ -473,6 +517,13 @@ void test_runtime_csv_logger()
   const RuntimeTransportSnapshot transport{4, 5, 6};
   logger.log(result, transport);
   assert(logger.rows_written() == 1);
+  result.bullet_speed_overridden = false;
+  result.pipeline->aim.bullet_speed_m_s = 22.0;
+  logger.log(result, transport);
+  result.feedback->state.shoot.bullet_speed = 30.0F;
+  result.pipeline->aim.bullet_speed_m_s = 30.0;
+  logger.log(result, transport);
+  assert(logger.rows_written() == 3);
 
   std::ifstream input(path);
   std::stringstream contents;
@@ -489,6 +540,8 @@ void test_runtime_csv_logger()
   assert(text.find("\"comma,error\",250000,video_nominal_fps,0,tracking_four_plates,1,2,0.875,10,20,30,20,30,40,10,40,") != std::string::npos);
   assert(text.find(",tracking_four_plates,1,1,1,") != std::string::npos);
   assert(text.find(",12,-2,350,-10,0,0,2,fixed,\n") != std::string::npos);
+  assert(text.find(",12,-2,350,-10,0,0,2,default,\n") != std::string::npos);
+  assert(text.find(",12,-2,350,-10,0,30,2,referee,\n") != std::string::npos);
 
   RuntimeCsvLogger disabled;
   disabled.log(result);
@@ -689,6 +742,7 @@ int main()
   test_recording_options();
   test_center_pattern_options();
   test_classifier_and_rotation_options();
+  test_brightness_options();
   test_config_file_and_cli_override();
   test_follow_and_fixed_speed_options();
   test_runtime_csv_logger();

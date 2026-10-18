@@ -12,6 +12,7 @@ namespace
 using srm::vision::LightColor;
 using srm::vision::TraditionalDetector;
 using srm::vision::TraditionalDetectorConfig;
+using srm::vision::BrightnessMethod;
 
 cv::Mat make_blue_armor_image()
 {
@@ -379,11 +380,82 @@ void test_classifier_replaces_brightness_gate_and_rejects_blank()
   assert(!rejected.rejected_armors[0].classification.rejection.empty());
 }
 
+void test_grayscale_separates_lights_from_blue_halo()
+{
+  cv::Mat image(160, 240, CV_8UC3, cv::Scalar(0, 0, 0));
+  for (int x : {40, 140}) {
+    cv::rectangle(image, {x, 50, 38, 40}, {220, 20, 20}, cv::FILLED);
+    cv::rectangle(image, {x, 50, 8, 40}, {255, 220, 180}, cv::FILLED);
+  }
+  TraditionalDetectorConfig config;
+  config.require_center_pattern = false;
+  const auto merged = TraditionalDetector(config).detect(image);
+  assert(merged.lightbars.empty() && merged.armors.empty());
+  config.brightness_method = BrightnessMethod::grayscale;
+  config.brightness_threshold = 160;
+  const auto separated = TraditionalDetector(config).detect(image);
+  assert(separated.lightbars.size() == 2 && separated.armors.size() == 1);
+  assert(separated.brightness_mask.at<unsigned char>(60, 60) == 0);
+  assert(separated.brightness_mask.at<unsigned char>(60, 43) == 255);
+  assert(separated.armors[0].color == LightColor::blue);
+}
+
+void test_grayscale_threshold_and_color_for_both_light_colors()
+{
+  for (const auto & color : {cv::Scalar(255, 220, 180), cv::Scalar(180, 220, 255)}) {
+    cv::Mat image(160, 240, CV_8UC3, cv::Scalar(0, 0, 0));
+    for (int x : {40, 140}) cv::rectangle(image, {x, 50, 8, 40}, color, cv::FILLED);
+    image.at<cv::Vec3b>(10, 10) = {160, 160, 160};
+    image.at<cv::Vec3b>(10, 11) = {161, 161, 161};
+    TraditionalDetectorConfig config;
+    config.brightness_method = BrightnessMethod::grayscale;
+    config.brightness_threshold = 160;
+    config.require_center_pattern = false;
+    const auto result = TraditionalDetector(config).detect(image);
+    assert(result.armors.size() == 1);
+    assert(result.armors[0].color == (color[0] > color[2] ? LightColor::blue : LightColor::red));
+    assert(result.brightness_mask.at<unsigned char>(10, 10) == 0);
+    assert(result.brightness_mask.at<unsigned char>(10, 11) == 255);
+  }
+  // 纯蓝的灰度只有29：不能把此模式当作暗光/纯色灯条的通用默认值。
+  TraditionalDetectorConfig config;
+  config.brightness_method = BrightnessMethod::grayscale;
+  assert(TraditionalDetector(config).detect(make_blue_armor_image()).lightbars.empty());
+}
+
+void test_classifier_uses_bgr_luminance()
+{
+  srm::vision::NumberClassifierConfig config;
+  config.model_path = std::string(SRM_TEST_NUMBER_MODEL_DIR) + "/mlp.onnx";
+  config.label_path = std::string(SRM_TEST_NUMBER_MODEL_DIR) + "/label.txt";
+  srm::vision::NumberClassifier classifier(config);
+  for (int width : {32, 54}) {
+    // 手工已知BGR灰度：纯蓝255 -> 29，纯红255 -> 76。
+    // 两张图表达相同亮度图案，分类必须一致；红蓝权重交换会反转前景。
+    cv::Mat color(28, width, CV_8UC3, cv::Scalar(255, 0, 0));
+    cv::Mat gray(28, width, CV_8UC3, cv::Scalar(29, 29, 29));
+    cv::putText(color, "4", {width / 2 - 11, 25}, cv::FONT_HERSHEY_SIMPLEX, 1.0, {0, 0, 255}, 2);
+    cv::putText(gray, "4", {width / 2 - 11, 25}, cv::FONT_HERSHEY_SIMPLEX, 1.0, {76, 76, 76}, 2);
+    srm::vision::ArmorObservation armor;
+    armor.ratio = width == 32 ? 2.0 : 4.0;
+    armor.points = {{{0, 7}, {static_cast<float>(width - 1), 7},
+                     {static_cast<float>(width - 1), 19}, {0, 19}}};
+    const auto actual = classifier.classify(color, armor);
+    const auto expected = classifier.classify(gray, armor);
+    assert(actual.label == expected.label);
+    assert(std::abs(actual.confidence - expected.confidence) < 1e-6);
+    assert(actual.rejection == expected.rejection);
+  }
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
 {
   const std::pair<const char *, void (*)()> tests[] = {
+    {"grayscale_halo", test_grayscale_separates_lights_from_blue_halo},
+    {"grayscale_colors", test_grayscale_threshold_and_color_for_both_light_colors},
+    {"classifier_bgr", test_classifier_uses_bgr_luminance},
     {"single_blue_armor", test_single_blue_armor},
     {"different_colors_do_not_pair", test_different_colors_do_not_pair},
     {"invalid_image_and_configuration", test_invalid_image_and_configuration},

@@ -150,8 +150,9 @@ int main(int argc, const char * const argv[])
       throw std::invalid_argument("live follow requires rotation.feedback_frame_confirmed=true (Tongji yaw/roll right-hand, pitch down positive)");
     }
     std::cerr << "aim_mode=" << (options.follow_target ? "non_firing_follow" : "configured_pipeline")
-              << " bullet_speed_source=" << (options.safety.fixed_bullet_speed_m_s ? "fixed" : "referee");
+              << " bullet_speed_source=" << (options.safety.fixed_bullet_speed_m_s ? "fixed" : "referee_or_default");
     if (options.safety.fixed_bullet_speed_m_s) std::cerr << " bullet_speed_m_s=" << *options.safety.fixed_bullet_speed_m_s;
+    else std::cerr << " default_bullet_speed_m_s=" << srm::control::kDefaultBulletSpeedMps;
     std::cerr << '\n';
     if (!options.intrinsics_set && !calibration) {
       std::cerr
@@ -183,9 +184,14 @@ int main(int argc, const char * const argv[])
     }
     srm::io::SelfAimTransport transport(options.transport);           // 串口通信模块
     srm::vision::TraditionalDetectorConfig detector_config;
+    detector_config.brightness_method = options.brightness_method;
+    detector_config.brightness_threshold = options.brightness_threshold;
     detector_config.require_center_pattern = options.require_center_pattern;
     detector_config.classifier = options.classifier;
     srm::vision::TraditionalDetector detector(detector_config);       // 传统视觉检测模块
+    std::cerr << "detector_brightness_method="
+              << (options.brightness_method == srm::vision::BrightnessMethod::grayscale ? "grayscale" : "max_channel")
+              << " brightness_threshold=" << options.brightness_threshold << '\n';
     srm::app::RuntimeCsvLogger logger(options.log_path);              // 运行日志记录模块
     srm::app::RuntimeStatistics statistics;                           // 运行统计模块，记录各个功能运行了多少次，有什么报错，运行了多久等信息
     const auto timed = [&statistics](srm::app::TimingStage stage, const auto & action) {
@@ -197,7 +203,8 @@ int main(int argc, const char * const argv[])
     std::optional<srm::vision::DetectionResult> last_detection;       // 本帧检测结果，供保存和窗口显示使用。
     std::optional<srm::app::DebugViewer> debug_viewer;
     if (options.show_debug) {
-      const bool realtime = frame_source.type() == srm::io::FrameSourceType::mvs_camera ||
+      const bool realtime = !options.dry_run ||
+                            frame_source.type() == srm::io::FrameSourceType::mvs_camera ||
                             frame_source.type() == srm::io::FrameSourceType::opencv_camera;
       const double nominal_fps = frame_source.nominal_fps();
       const double playback_fps = options.playback_fps > 0.0
@@ -206,9 +213,9 @@ int main(int argc, const char * const argv[])
                                         ? nominal_fps : 30.0);
       debug_viewer.emplace(
         playback_fps,
-        options.start_paused ||
-          options.frame_source.type == srm::io::FrameSourceType::image_file, realtime);
-      if (realtime) std::cerr << "camera preview: q/Esc=quit (no pause or playback pacing)\n";
+        !realtime && (options.start_paused ||
+          options.frame_source.type == srm::io::FrameSourceType::image_file), realtime);
+      if (realtime) std::cerr << "live/camera preview: q/Esc=quit (no pause or playback pacing)\n";
       else std::cerr << "debug windows: Space=pause/resume n=next q/Esc=quit playback_fps="
                      << playback_fps << '\n';
     }

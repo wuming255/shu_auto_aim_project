@@ -112,7 +112,9 @@ void RuntimeCsvLogger::log(
   } else {
     stream_ << ",,,,,";
   }
-  stream_ << ',' << (result.bullet_speed_overridden ? "fixed" : "referee") << ','
+  const char * speed_source = result.bullet_speed_overridden ? "fixed" :
+    (!result.feedback || result.feedback->state.shoot.bullet_speed == 0.0F ? "default" : "referee");
+  stream_ << ',' << speed_source << ','
           << csv_field(result.pipeline ? result.pipeline->aim.error : "") << '\n';
   stream_.flush();
   if (!stream_) throw std::runtime_error("failed while writing runtime log: " + path_);

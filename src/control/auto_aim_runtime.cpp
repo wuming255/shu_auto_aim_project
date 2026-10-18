@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <exception>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -64,9 +63,8 @@ RuntimeStepResult AutoAimRuntime::step()
   result.feedback = snapshot;
   const auto state = snapshot ? std::optional<protocol::IncomingState>(snapshot->state) : std::nullopt;
   const auto state_timestamp = snapshot ? std::optional<std::chrono::steady_clock::time_point>(snapshot->timestamp) : std::nullopt;
-  const double bullet_speed = safety_controller_.config().fixed_bullet_speed_m_s.value_or(
-    state ? static_cast<double>(state->shoot.bullet_speed)
-          : std::numeric_limits<double>::quiet_NaN());
+  const double bullet_speed = safety_controller_.effective_bullet_speed(
+    state ? static_cast<double>(state->shoot.bullet_speed) : 0.0);
 
   try {
     if (frame.timeline_reset) pipeline_.reset();

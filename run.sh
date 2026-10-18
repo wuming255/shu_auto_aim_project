@@ -25,6 +25,7 @@ usage() {
   bash run.sh list
   bash run.sh info --mvs-serial ACTUAL_SERIAL
   bash run.sh mvs --max-frames 120
+  bash run.sh mvs --live --show-debug
   bash run.sh mvs --show-debug --record replay_debug/session-01.avi
   bash run.sh --config my-settings.conf
 

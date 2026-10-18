@@ -109,7 +109,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     }
 
     const double transport_bullet_speed =
-      config_.fixed_bullet_speed_m_s.value_or(input.transport_state->shoot.bullet_speed);
+      effective_bullet_speed(input.transport_state->shoot.bullet_speed);
     transport_bullet_speed_valid =
       finite(transport_bullet_speed) &&
       transport_bullet_speed >= config_.min_bullet_speed_m_s &&
@@ -263,6 +263,12 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   output.summary = reason_text(output.reasons);
   if (output.reasons.empty()) output.summary = "none";
   return output;
+}
+
+double SafetyController::effective_bullet_speed(double reported_speed_m_s) const noexcept
+{
+  return config_.fixed_bullet_speed_m_s.value_or(
+    reported_speed_m_s == 0.0 ? kDefaultBulletSpeedMps : reported_speed_m_s);
 }
 
 const SafetyControllerConfig & SafetyController::config() const noexcept
