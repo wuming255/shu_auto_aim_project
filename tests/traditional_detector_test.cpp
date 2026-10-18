@@ -448,11 +448,96 @@ void test_classifier_uses_bgr_luminance()
   }
 }
 
+void test_pair_distance_uses_mean_light_length()
+{
+  // 两灯长40/60、中心距90，平均灯长归一化为1.8；用较长灯条则误算为1.5。
+  cv::Mat image(180, 240, CV_8UC3, cv::Scalar(0, 0, 0));
+  cv::rectangle(image, {60, 60, 7, 41}, {255, 0, 0}, cv::FILLED);
+  cv::rectangle(image, {150, 50, 7, 61}, {255, 0, 0}, cv::FILLED);
+  TraditionalDetectorConfig config;
+  config.require_center_pattern = false;
+  config.min_armor_ratio = 1.7;
+  config.max_armor_ratio = 1.9;
+  config.max_side_ratio = 1.6;
+  const auto result = TraditionalDetector(config).detect(image);
+  assert(result.lightbars.size() == 2);
+  assert(result.armors.size() == 1);
+  assert(std::abs(result.armors[0].ratio - 1.8) < 1e-6);
+}
+
+void test_projected_pair_distance_range()
+{
+  TraditionalDetectorConfig config;
+  config.require_center_pattern = false;
+  // 灯长40；0.8下界包含，5.5上界不包含，同时拒绝过近/过远灯条对。
+  for (const auto & sample : {std::pair<int, bool>{31, false}, {32, true}, {33, true},
+                              {219, true}, {220, false}, {221, false}}) {
+    cv::Mat image(180, 360, CV_8UC3, cv::Scalar(0, 0, 0));
+    for (int x : {30, 30 + sample.first}) {
+      cv::rectangle(image, {x, 60, 7, 41}, {255, 0, 0}, cv::FILLED);
+    }
+    const auto result = TraditionalDetector(config).detect(image);
+    assert(result.lightbars.size() == 2);
+    assert(result.armors.size() == (sample.second ? 1U : 0U));
+  }
+}
+
+void test_pair_rejection_counts_identify_first_failed_stage()
+{
+  TraditionalDetectorConfig config;
+  config.require_center_pattern = false;
+  const auto pair = [](int dx, int dy, int right_height, bool red) {
+    cv::Mat image(300, 400, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(image, {30, 100, 7, 41}, {255, 0, 0}, cv::FILLED);
+    cv::rectangle(image, {30 + dx, 120 + dy - right_height / 2, 7, right_height},
+                  red ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0), cv::FILLED);
+    return image;
+  };
+  const auto color = TraditionalDetector(config).detect(pair(80, 0, 41, true));
+  assert(color.armors.empty());
+  assert(color.pairing_rejections.color == 1);
+  assert(color.pairing_rejections.distance == 0);
+  const auto distance = TraditionalDetector(config).detect(pair(250, 0, 41, false));
+  assert(distance.armors.empty() && distance.pairing_rejections.distance == 1);
+  const auto side = TraditionalDetector(config).detect(pair(100, 0, 81, false));
+  assert(side.armors.empty() && side.pairing_rejections.side_ratio == 1);
+  const auto angle = TraditionalDetector(config).detect(pair(80, 70, 41, false));
+  assert(angle.armors.empty() && angle.pairing_rejections.angle == 1);
+  auto image = pair(120, 0, 41, false);
+  cv::rectangle(image, {90, 100, 7, 41}, {0, 0, 255}, cv::FILLED);
+  const auto intervening = TraditionalDetector(config).detect(image);
+  assert(intervening.armors.empty());
+  assert(intervening.pairing_rejections.intervening_light == 1);
+  assert(intervening.pairing_rejections.color == 2);
+  const auto accepted = TraditionalDetector(config).detect(pair(80, 0, 41, false));
+  assert(accepted.armors.size() == 1);
+  const auto & counts = accepted.pairing_rejections;
+  assert(counts.color + counts.degenerate + counts.distance + counts.side_ratio +
+         counts.angle + counts.intervening_light == 0);
+}
+
+void test_pair_geometry_rejects_nonfinite_limits()
+{
+  for (double value : {std::numeric_limits<double>::quiet_NaN(),
+                        std::numeric_limits<double>::infinity()}) {
+    TraditionalDetectorConfig config;
+    config.max_armor_ratio = value;
+    bool rejected = false;
+    try { (void)TraditionalDetector(config); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    assert(rejected);
+  }
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
 {
   const std::pair<const char *, void (*)()> tests[] = {
+    {"mean_light_distance", test_pair_distance_uses_mean_light_length},
+    {"projected_distance_range", test_projected_pair_distance_range},
+    {"pair_rejection_counts", test_pair_rejection_counts_identify_first_failed_stage},
+    {"finite_pair_geometry", test_pair_geometry_rejects_nonfinite_limits},
     {"grayscale_halo", test_grayscale_separates_lights_from_blue_halo},
     {"grayscale_colors", test_grayscale_threshold_and_color_for_both_light_colors},
     {"classifier_bgr", test_classifier_uses_bgr_luminance},

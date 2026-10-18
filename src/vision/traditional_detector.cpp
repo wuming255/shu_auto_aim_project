@@ -78,6 +78,7 @@ TraditionalDetector::TraditionalDetector(TraditionalDetectorConfig config) : con
   }
   if (!finite_non_negative(config_.min_lightbar_length) ||
       !finite_non_negative(config_.min_armor_ratio) ||
+      !std::isfinite(config_.max_armor_ratio) ||
       config_.max_armor_ratio <= config_.min_armor_ratio ||
       !finite_non_negative(config_.max_side_ratio) ||
       !finite_non_negative(config_.max_rectangular_error_deg) ||
@@ -157,7 +158,10 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
          ++right_index) {
       const auto & left = result.lightbars[left_index];         // 左灯条放左
       const auto & right = result.lightbars[right_index];       // 右灯条放右
-      if (left.color != right.color) continue;
+      if (left.color != right.color) {
+        ++result.pairing_rejections.color;
+        continue;
+      }
 
       ArmorObservation armor;     // 构建装甲板并输入各个数据
       armor.left = left;
@@ -171,10 +175,12 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
       const auto min_length = std::min(left.length, right.length);
       if (max_length <= std::numeric_limits<double>::epsilon() ||
           min_length <= std::numeric_limits<double>::epsilon()) {     // std::numeric_limits<double>::epsilon()是获取double的机器精度，
+        ++result.pairing_rejections.degenerate;
         continue;                                                     // 小于机器精度的话说明这个数值过小接近于0了
       }
 
-      armor.ratio = center_distance / max_length;                    // 中心距离和长度距离的比值
+      // 平均灯长避免单侧轮廓变长主导归一化；分类器也使用这一图像比例。
+      armor.ratio = center_distance / ((left.length + right.length) / 2.0);
       armor.side_ratio = max_length / min_length;                    // 最长和最短的比值
       const auto left_to_right = right.center - left.center;         // 方向向量，用于下面算方向角的
       const auto roll = std::atan2(left_to_right.y, left_to_right.x);                  // 算中心连线的方向角
@@ -182,8 +188,11 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
       const auto right_error = line_angle_error(right.angle, roll + kPi / 2.0);
       armor.rectangular_error = std::max(left_error, right_error);
 
-      if (!valid_armor(armor)) continue;                  // 这里面写了对方向角的要求
-      if (contains_light(armor, result.lightbars)) continue;
+      if (!valid_armor(armor, result.pairing_rejections)) continue;
+      if (contains_light(armor, result.lightbars)) {
+        ++result.pairing_rejections.intervening_light;
+        continue;
+      }
       // 分类器直接处理几何候选，不能先被旧亮图案阈值排除。
       if (!classifier_ && config_.require_center_pattern && !valid_center_pattern(bgr_image, armor)) continue;
       armor.roi = make_roi(armor, bgr_image.size());      // 装甲板合格就生成关注区域
@@ -332,12 +341,22 @@ bool TraditionalDetector::valid_lightbar(const LightbarObservation & lightbar) c
          lightbar.length > config_.min_lightbar_length;
 }
 
-bool TraditionalDetector::valid_armor(const ArmorObservation & armor) const
+bool TraditionalDetector::valid_armor(
+  const ArmorObservation & armor, PairingRejectionCounts & rejections) const
 {
-  return armor.ratio > config_.min_armor_ratio &&
-         armor.ratio < config_.max_armor_ratio &&
-         armor.side_ratio < config_.max_side_ratio &&
-         armor.rectangular_error < max_rectangular_error_rad_;
+  if (armor.ratio < config_.min_armor_ratio || armor.ratio >= config_.max_armor_ratio) {
+    ++rejections.distance;
+    return false;
+  }
+  if (armor.side_ratio >= config_.max_side_ratio) {
+    ++rejections.side_ratio;
+    return false;
+  }
+  if (armor.rectangular_error >= max_rectangular_error_rad_) {
+    ++rejections.angle;
+    return false;
+  }
+  return true;
 }
 
 bool TraditionalDetector::contains_light(

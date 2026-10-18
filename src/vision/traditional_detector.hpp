@@ -39,8 +39,9 @@ struct TraditionalDetectorConfig        // 检测器配置文件
   double min_lightbar_ratio = 1.5;                  // 灯条的最小长宽比
   double max_lightbar_ratio = 20.0;                 // 灯条的最大长宽比
   double min_lightbar_length = 8.0;                 // 灯条最小长度
-  double min_armor_ratio = 1.0;                     // 装甲板的最小长宽比
-  double max_armor_ratio = 5.0;                     // 装甲板的最大长宽比
+  // 中心距 / 平均灯长；含下界、不含上界，表示图像几何而非物理靶板类型。
+  double min_armor_ratio = 0.8;
+  double max_armor_ratio = 5.5;
   double max_side_ratio = 1.5;                      // 两根灯条长度的最大比值
   double max_rectangular_error_deg = 25.0;
 
@@ -85,13 +86,24 @@ struct ArmorObservation                       // 装甲板识别结果
   cv::Point2f center;
   cv::Rect roi;                               // 装甲板及周围的一块“感兴趣”矩形区域
 
-  // 两灯条中点距离 / 较长灯条长度。
+  // 两灯条中点距离 / 平均灯条长度；同时用于几何筛选和分类裁剪宽度。
   double ratio = 0.0;
   // 较长灯条长度 / 较短灯条长度。
   double side_ratio = 0.0;
   // 灯条方向与装甲板横向方向的矩形误差，单位为弧度。
   double rectangular_error = 0.0;
   NumberClassification classification;
+};
+
+// 每个灯条对只记首次失败的几何阶段；内容/共享灯条拒绝另见 rejected_armors。
+struct PairingRejectionCounts
+{
+  std::size_t color = 0;
+  std::size_t degenerate = 0;
+  std::size_t distance = 0;
+  std::size_t side_ratio = 0;
+  std::size_t angle = 0;
+  std::size_t intervening_light = 0;
 };
 
 struct DetectionResult                // 单次检测结果
@@ -101,6 +113,7 @@ struct DetectionResult                // 单次检测结果
   std::vector<LightbarObservation> lightbars;     // 灯条列表
   std::vector<ArmorObservation> armors;           // 装甲板列表
   std::vector<ArmorObservation> rejected_armors;  // 内容或共享灯条消歧失败，保留证据。
+  PairingRejectionCounts pairing_rejections;
 };
 
 // 按内容置信度选择互不共享灯条的候选；近似等分或过大的冲突组保留拒绝证据。
@@ -122,7 +135,7 @@ private:
   static LightbarObservation make_lightbar(const cv::RotatedRect & rotated_rect, std::size_t id);     // 识别灯条
 
   bool valid_lightbar(const LightbarObservation & lightbar) const;      // 判断灯条合理性
-  bool valid_armor(const ArmorObservation & armor) const;               // 判断装甲板合理性
+  bool valid_armor(const ArmorObservation & armor, PairingRejectionCounts & rejections) const;
   static bool contains_light(
     const ArmorObservation & armor, const std::vector<LightbarObservation> & lightbars);
   bool valid_center_pattern(const cv::Mat & bgr_image, const ArmorObservation & armor) const;

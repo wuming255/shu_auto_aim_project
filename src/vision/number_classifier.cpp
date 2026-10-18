@@ -38,6 +38,7 @@ NumberClassifier::NumberClassifier(NumberClassifierConfig config) : config_(std:
 NumberClassification NumberClassifier::classify(
   const cv::Mat & bgr, const ArmorObservation & armor) const
 {
+  // 与配对一致，ratio 为中心距 / 平均灯长；3.2仅决定图像裁剪宽度。
   const int width = armor.ratio > 3.2 ? 54 : 32;
   const std::array<cv::Point2f, 4> destination{{{0,7}, {static_cast<float>(width-1),7},
     {static_cast<float>(width-1),19}, {0,19}}};
