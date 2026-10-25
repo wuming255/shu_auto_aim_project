@@ -171,7 +171,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     double yaw_deg = pipeline->aim.yaw_deg;
     double pitch_deg = pipeline->aim.pitch_deg;
     bool feedback_valid = true;
-    if (pipeline->follow_target) {
+    if (pipeline->follow_target || pipeline->guard_command_valid) {
       const auto & feedback = input.transport_state->gimbal;
       feedback_valid = finite(feedback.yaw) && finite(feedback.pitch) && finite(feedback.roll);
       // 同济参考输出绝对角，pitch 向下为正；yaw 保持反馈附近的连续周次。
@@ -235,7 +235,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     (pipeline->guard_target_visible && pipeline->fire_window_valid);
   const bool fire_gate =
     command_aim_valid && output.aim_command_valid && config_.allow_visual_fire &&
-    !config_.fixed_bullet_speed_m_s && !pipeline->follow_target &&
+    !config_.fixed_bullet_speed_m_s &&
     input.visual_fire_intent && gimbal_settled && guard_fire_conditions;
   if (fire_gate) {
     output.command.fire.fire_flag = 1;
@@ -248,14 +248,13 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
     } else {
       output.state = SafetyState::safe;
       output.command.gimbal = {};
-      if (pipeline && pipeline->follow_target && input.transport_state &&
+      if (input.transport_state &&
           transport_state_timestamp_valid && input.transport_connected &&
           finite(input.transport_state->gimbal.yaw) && finite(input.transport_state->gimbal.pitch)) {
         output.command.gimbal = {input.transport_state->gimbal.yaw, input.transport_state->gimbal.pitch};
       }
     }
-    if (input.visual_fire_intent && (!config_.allow_visual_fire ||
-        config_.fixed_bullet_speed_m_s || (pipeline && pipeline->follow_target))) {
+    if (input.visual_fire_intent && (!config_.allow_visual_fire || config_.fixed_bullet_speed_m_s)) {
       add_reason(output, SafetyReason::fire_disabled);
     }
   }

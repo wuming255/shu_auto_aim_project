@@ -109,6 +109,11 @@ RuntimeStepResult AutoAimRuntime::step()
   input.transport_state_timestamp = state_timestamp;
   input.processing_ok = result.pipeline.has_value() && result.error.empty();
   input.pipeline_result = result.pipeline.has_value() ? &result.pipeline.value() : nullptr;     // 依旧设置参数
+  input.visual_fire_intent = result.pipeline.has_value() && result.pipeline->tracking.state ==
+    vision::TargetTrackState::tracking && result.pipeline->aim.valid &&
+    (result.pipeline->follow_target ||
+     (result.pipeline->guard_command_valid && result.pipeline->guard_target_visible &&
+      result.pipeline->fire_window_valid));
   result.safety = safety_controller_.decide(input);                                             // 继续设参数
   transport_.set_command(result.safety.command);                        // 进行通信
   result.step_duration = std::chrono::duration_cast<std::chrono::microseconds>(

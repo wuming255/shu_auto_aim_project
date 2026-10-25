@@ -152,12 +152,12 @@ vision::TargetTrackEstimate FixedGuardController::make_target(
   target.velocity_valid = true;
 
   const auto world_position = rotation.armor_position(0.0, plate);
-  const auto position = rotation.rotation_gimbal_to_world.t() * world_position;
+  const auto position = world_position;
   const auto radial = world_position - rotation.center_world_m;
   const auto world_velocity = cv::Vec3d(
     -rotation.angular_velocity_rad_s * radial[1],
     rotation.angular_velocity_rad_s * radial[0], 0.0);
-  const auto velocity = rotation.rotation_gimbal_to_world.t() * world_velocity;
+  const auto velocity = world_velocity;
   const double horizontal = std::hypot(position[0], position[1]);
   const double range = cv::norm(position);
 
