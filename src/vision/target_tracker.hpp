@@ -27,7 +27,7 @@ struct TargetTrackerConfig
   // 连续有效观测达到该数量后才进入 tracking；1 表示首个有效观测即可跟踪。
   std::size_t min_confirmed_updates = 3;
   // tracking 状态下允许连续无有效观测的帧数，超过后回到 lost。
-  std::size_t max_consecutive_misses = 3;
+  std::size_t max_consecutive_misses = 5;
 
   // 时间戳异常保护。真实帧率和调度延迟未知，现场适配时必须配置和验证。
   double min_dt_seconds = 1e-4;
@@ -43,8 +43,8 @@ struct TargetTrackerConfig
   // 无穷大表示不按速度做额外拒绝；仍会拒绝非有限速度。
   double max_abs_angular_velocity_rad_s = std::numeric_limits<double>::infinity();
 
-  // 已有跟踪状态时，从本帧所有有效候选中选择最接近当前预测的位置，
-  // 避免单帧选择器因视轴排序而在多个候选间来回跳转。
+  // 已有跟踪状态时，在通过关联门限的候选中，按云台坐标系三维位置与当前
+  // 图像时刻预测位置的欧氏距离选择；预测不可用时参考最后一次有效观测。
   bool use_prediction_association = true;
   double max_association_angular_error_rad = std::numeric_limits<double>::infinity();
   double max_association_range_error_m = std::numeric_limits<double>::infinity();

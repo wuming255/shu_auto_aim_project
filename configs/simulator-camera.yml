@@ -1,0 +1,17 @@
+%YAML:1.0
+---
+# Bevy simulator /camera_info, 1440x1080, vertical FOV 45 degrees.
+# Native upright RGB8 is converted to BGR8 without rotating the pixels.
+# Regenerate from /camera_info if simulator resolution/FOV changes.
+schema_version: 1
+image_width: 1440
+image_height: 1080
+orientation_deg: 0
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1303.675283386667, 0., 720.,
+           0., 1303.675283386667, 540.,
+           0., 0., 1. ]
+distortion_coefficients: [ 0., 0., 0., 0., 0. ]

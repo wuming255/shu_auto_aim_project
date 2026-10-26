@@ -317,8 +317,55 @@ target_compile_options(srm_auto_aim_app PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
 )
 
+option(SRM_ENABLE_ROS2_SIMULATOR "Build optional ROS 2 simulator auto aim" OFF)
+if(SRM_ENABLE_ROS2_SIMULATOR)
+  find_package(ament_cmake REQUIRED)
+  find_package(rclcpp REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(tf2_msgs REQUIRED)
+  find_package(rm_interfaces REQUIRED)
+  add_library(srm_ros_image STATIC src/io/ros_image.cpp)
+  target_include_directories(srm_ros_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(srm_ros_image PUBLIC srm_camera_calibration)
+  ament_target_dependencies(srm_ros_image PUBLIC sensor_msgs)
+  add_library(srm_simulator_control STATIC src/io/simulator_control.cpp)
+  target_link_libraries(srm_simulator_control PUBLIC srm_safety_controller srm_ros_image)
+  ament_target_dependencies(srm_simulator_control PUBLIC rm_interfaces tf2_msgs)
+  add_executable(srm_simulator_app src/app/simulator_main.cpp src/app/debug_viewer.cpp)
+  target_link_libraries(srm_simulator_app PRIVATE srm_simulator_control srm_app_support srm_traditional_detector)
+  target_compile_definitions(srm_simulator_app PRIVATE
+    SRM_DEFAULT_NUMBER_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models/armor_number")
+  ament_target_dependencies(srm_simulator_app PUBLIC rclcpp sensor_msgs)
+  if(SRM_ENABLE_GUI AND OpenCV_highgui_FOUND)
+    target_compile_definitions(srm_simulator_app PRIVATE SRM_HAVE_HIGHGUI=1)
+    target_link_libraries(srm_simulator_app PRIVATE opencv_highgui)
+  endif()
+  foreach(target srm_ros_image srm_simulator_control srm_simulator_app)
+    target_compile_options(${target} PRIVATE
+      $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>)
+  endforeach()
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
+  if(SRM_ENABLE_ROS2_SIMULATOR)
+    add_executable(srm_ros_image_test tests/ros_image_test.cpp)
+    target_link_libraries(srm_ros_image_test PRIVATE srm_ros_image)
+    add_test(NAME srm_ros_image_test COMMAND srm_ros_image_test)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME srm_simulator_ros_smoke_test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/simulator_ros_smoke.py
+      --launcher ${CMAKE_CURRENT_SOURCE_DIR}/run.sh
+      --output ${CMAKE_CURRENT_BINARY_DIR}/simulator_ros_smoke)
+    set_tests_properties(srm_simulator_ros_smoke_test PROPERTIES TIMEOUT 30
+      ENVIRONMENT "SRM_SIM_APP=$<TARGET_FILE:srm_simulator_app>")
+    add_test(NAME srm_simulator_control_smoke_test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/simulator_control_smoke.py
+      --launcher ${CMAKE_CURRENT_SOURCE_DIR}/run.sh
+      --output ${CMAKE_CURRENT_BINARY_DIR}/simulator_control_smoke)
+    set_tests_properties(srm_simulator_control_smoke_test PROPERTIES TIMEOUT 30
+      ENVIRONMENT "SRM_SIM_APP=$<TARGET_FILE:srm_simulator_app>")
+  endif()
   add_executable(srm_rotating_target_test tests/rotating_target_test.cpp)
   target_link_libraries(srm_rotating_target_test PRIVATE srm_target_tracker)
   add_test(NAME srm_rotating_target_test COMMAND srm_rotating_target_test)

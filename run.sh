@@ -13,6 +13,7 @@ usage() {
   image      图片回放，需要配置图片路径或 --source PATH
   mvs        海康 USB 采集，可用 --show-debug 实时预览
   camera     OpenCV camera index 采集，可用 --show-debug 实时预览
+  simulator  ROS 2 仿真自瞄闭环，默认跟随并显示检测窗口
   list       枚举 MVS USB 设备后退出
   info       查询 MVS 设备参数后退出，不修改节点或取流
   app-help   显示原程序的完整参数
@@ -28,6 +29,8 @@ usage() {
   bash run.sh mvs --live --show-debug
   bash run.sh mvs --show-debug --record replay_debug/session-01.avi
   bash run.sh --config my-settings.conf
+  ROS_DOMAIN_ID=31 bash run.sh simulator
+  bash run.sh simulator --help
 
 默认配置：项目根目录 run.conf（离线视频、dry-run、运行到 EOF）。
 --config PATH 替换默认配置；末尾应用参数覆盖配置和模式预设。
@@ -36,6 +39,10 @@ usage() {
 
 环境变量：SRM_APP 指定可执行文件，默认 build/srm_auto_aim_app。
           MVS_ROOT 指定 SDK 根目录，默认 /opt/MVS。
+          SRM_SIM_APP 指定仿真入口，默认 build/srm_simulator_app。
+          SRM_ROS_SETUP 指定 ROS 环境，默认 /opt/ros/humble/setup.bash。
+          SRM_SIM_ROS_SETUP 指定仿真器 install/setup.bash，默认使用相邻仿真目录。
+仿真模式使用 ROS 参数和 /camera_info，不读取实车 run.conf。
 详细说明：docs/launcher.md
 HELP
 }
@@ -44,7 +51,7 @@ mode=run
 if (($#)); then
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    run|video|image|mvs|camera|list|info|app-help) mode="$1"; shift ;;
+    run|video|image|mvs|camera|simulator|list|info|app-help) mode="$1"; shift ;;
     --*) ;;  # 不写模式，直接传入应用选项。
     *) printf '未知模式：%s；使用 bash run.sh --help 查看用法。\n' "$1" >&2; exit 2 ;;
   esac
@@ -52,6 +59,29 @@ fi
 
 # 固定相对路径基准，不依赖调用者所在目录。
 cd -- "$ROOT"
+if [[ "$mode" == simulator ]]; then
+  sim_app="${SRM_SIM_APP:-$ROOT/build/srm_simulator_app}"
+  if [[ ! -x "$sim_app" ]]; then
+    printf '找不到仿真入口：%s\n请先执行：\n' "$sim_app" >&2
+    printf '  source /opt/ros/humble/setup.bash\n  cmake -S . -B build -DSRM_ENABLE_ROS2_SIMULATOR=ON\n  cmake --build build -j2\n' >&2
+    exit 1
+  fi
+  ros_setup="${SRM_ROS_SETUP:-/opt/ros/humble/setup.bash}"
+  if [[ ! -f "$ros_setup" ]]; then
+    printf '找不到 ROS 2 环境：%s；请设置 SRM_ROS_SETUP。\n' "$ros_setup" >&2
+    exit 1
+  fi
+  set +u
+  source "$ros_setup"
+  sim_ros_setup="${SRM_SIM_ROS_SETUP:-$ROOT/../bevy_robomaster_simulator-main/install/setup.bash}"
+  if [[ ! -f "$sim_ros_setup" ]]; then
+    printf '找不到仿真消息环境：%s；请设置 SRM_SIM_ROS_SETUP 为仿真器 install/setup.bash。\n' "$sim_ros_setup" >&2
+    exit 1
+  fi
+  source "$sim_ros_setup"
+  set -u
+  exec "$sim_app" "$@"
+fi
 app="${SRM_APP:-$ROOT/build/srm_auto_aim_app}"
 if [[ ! -x "$app" ]]; then
   printf '找不到可执行文件：%s\n请先在项目根目录执行：\n' "$app" >&2

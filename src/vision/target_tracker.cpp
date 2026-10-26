@@ -22,6 +22,12 @@ bool valid_non_negative_limit(double value)
          (std::isinf(value) && value > 0.0);
 }
 
+cv::Vec3d position_from_spherical(double yaw, double pitch, double range) noexcept
+{
+  const double horizontal = range * std::cos(pitch);
+  return {horizontal * std::cos(yaw), horizontal * std::sin(yaw), range * std::sin(pitch)};
+}
+
 }  // namespace
 
 const char * to_string(TargetTrackState state) noexcept
@@ -299,20 +305,23 @@ const TargetObservation * TargetTracker::choose_observation(
   const bool prediction_age_valid =
     finite(age_seconds) && age_seconds >= 0.0 &&
     age_seconds <= config_.max_prediction_age_seconds;
+  // 关联到当前图像时刻，不叠加用于瞄准输出的固定前视时间。
   if (prediction_age_valid && velocity_valid_) {
     predicted_yaw += yaw_velocity_rad_s_ * age_seconds;
     predicted_pitch += pitch_velocity_rad_s_ * age_seconds;
     predicted_range += range_velocity_m_s_ * age_seconds;
   }
-  if (!finite(predicted_yaw) || !finite(predicted_pitch) || !finite(predicted_range)) {
-    return initially_selected != nullptr && valid_measurement(*initially_selected)
-             ? initially_selected
-             : nullptr;
+  if (!finite(predicted_yaw) || !finite(predicted_pitch) || !finite(predicted_range) ||
+      predicted_range <= 0.0) {
+    predicted_yaw = unwrapped_yaw_rad_;
+    predicted_pitch = measured_pitch_rad_;
+    predicted_range = measured_range_m_;
   }
+  const auto predicted_position = position_from_spherical(
+    predicted_yaw, predicted_pitch, predicted_range);
 
   const TargetObservation * best = nullptr;
-  double best_angular_error = std::numeric_limits<double>::infinity();
-  double best_range_error = std::numeric_limits<double>::infinity();
+  double best_position_error = std::numeric_limits<double>::infinity();
   std::size_t best_detection_index = std::numeric_limits<std::size_t>::max();
 
   for (const auto & candidate : selection.observations) {
@@ -329,15 +338,19 @@ const TargetObservation * TargetTracker::choose_observation(
       continue;
     }
 
+    const auto position = position_from_spherical(
+      candidate.pose.yaw_rad, candidate.pose.pitch_rad, candidate.pose.range_m);
+    const double position_error = std::hypot(
+      position[0] - predicted_position[0], position[1] - predicted_position[1],
+      position[2] - predicted_position[2]);
+    if (!finite(position_error)) continue;
     const bool better =
-      angular_error < best_angular_error ||
-      (angular_error == best_angular_error && range_error < best_range_error) ||
-      (angular_error == best_angular_error && range_error == best_range_error &&
+      position_error < best_position_error ||
+      (position_error == best_position_error &&
        candidate.detection_index < best_detection_index);
     if (better) {
       best = &candidate;
-      best_angular_error = angular_error;
-      best_range_error = range_error;
+      best_position_error = position_error;
       best_detection_index = candidate.detection_index;
     }
   }

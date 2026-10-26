@@ -185,6 +185,129 @@ void test_association_gate_treats_unrelated_candidate_as_miss()
   assert(result.consecutive_misses == 1);
 }
 
+void test_association_prefers_3d_proximity_over_angular_proximity()
+{
+  struct Scenario { double yaw; double pitch; double nearby_yaw; double nearby_pitch; };
+  for (const auto & scenario : {
+         Scenario{0.0, 0.0, 0.04, 0.0}, Scenario{0.0, 0.3, 0.0, 0.34},
+         Scenario{3.13, 0.0, -3.13, 0.0}}) {
+    TargetTracker tracker(make_config());
+    const TimePoint t0{};
+    (void)tracker.update(make_selection(make_observation(scenario.yaw, scenario.pitch)), t0);
+    auto angular_nearest = make_observation(scenario.yaw, scenario.pitch, 6.0);
+    angular_nearest.detection_index = 10;
+    auto spatial_nearest = make_observation(scenario.nearby_yaw, scenario.nearby_pitch, 5.02);
+    spatial_nearest.detection_index = 20;
+
+    // 方向完全相同但深度差1m的候选，应输给空间偏差不足0.21m的候选。
+    const auto result = tracker.update(
+      make_candidates({angular_nearest, spatial_nearest}, 0),
+      t0 + std::chrono::milliseconds(100));
+    assert(result.current_observation);
+    assert(result.current_observation->detection_index == 20);
+  }
+}
+
+void test_3d_association_accounts_for_height()
+{
+  TargetTracker tracker(make_config());
+  const TimePoint t0{};
+  (void)tracker.update(make_selection(make_observation(0.0)), t0);
+  auto raised = make_observation(0.0, 0.1, 5.0);
+  raised.detection_index = 10;
+  auto farther = make_observation(0.0, 0.0, 5.2);
+  farther.detection_index = 20;
+  // raised的水平偏差只有约0.025m，但包含高度后的偏差约0.5m，大于0.2m。
+  const auto result = tracker.update(
+    make_candidates({raised, farther}, 0), t0 + std::chrono::milliseconds(100));
+  assert(result.current_observation);
+  assert(result.current_observation->detection_index == 20);
+}
+
+void test_3d_association_predicts_to_current_frame_time()
+{
+  TargetTracker tracker(make_config());
+  const TimePoint t0{};
+  (void)tracker.update(make_selection(make_observation(0.0, 0.0, 5.0)), t0);
+  (void)tracker.update(
+    make_selection(make_observation(0.0, 0.0, 5.4)), t0 + std::chrono::milliseconds(100));
+  auto last_position = make_observation(0.0, 0.0, 5.4);
+  last_position.detection_index = 10;
+  auto current_position = make_observation(0.01, 0.0, 5.8);
+  current_position.detection_index = 20;
+  auto future_position = make_observation(0.0, 0.0, 6.2);
+  future_position.detection_index = 30;
+  // 4m/s径向运动：当前帧为5.8m；额外叠加0.1s前视会错误地关联到6.2m。
+  const auto result = tracker.update(
+    make_candidates({last_position, current_position, future_position}, 0),
+    t0 + std::chrono::milliseconds(200));
+  assert(result.current_observation);
+  assert(result.current_observation->detection_index == 20);
+}
+
+void test_invalid_position_prediction_falls_back_to_last_measurement()
+{
+  struct Scenario { double initial_range; double last_range; };
+  for (const auto & scenario : {Scenario{1.0, 0.2}, Scenario{1.5e308, 1.6e308}}) {
+    TargetTracker tracker(make_config());
+    const TimePoint t0{};
+    (void)tracker.update(make_selection(make_observation(0.0, 0.0, scenario.initial_range)), t0);
+    (void)tracker.update(
+      make_selection(make_observation(0.0, 0.0, scenario.last_range)),
+      t0 + std::chrono::milliseconds(100));
+    auto initially_selected = make_observation(0.0, 0.0, scenario.initial_range);
+    initially_selected.detection_index = 10;
+    auto near_last_position = make_observation(0.01, 0.0, scenario.last_range);
+    near_last_position.detection_index = 20;
+    // 分别使外推距离为负数和溢出；均应基于最后有效位置关联，而非返回单帧首选。
+    const auto result = tracker.update(
+      make_candidates({initially_selected, near_last_position}, 0),
+      t0 + std::chrono::milliseconds(300));
+    assert(result.current_observation);
+    assert(result.current_observation->detection_index == 20);
+  }
+}
+
+void test_3d_association_keeps_existing_gates()
+{
+  auto config = make_config();
+  config.max_association_angular_error_rad = 0.01;
+  config.max_association_range_error_m = 0.05;
+  TargetTracker tracker(config);
+  const TimePoint t0{};
+  (void)tracker.update(make_selection(make_observation(0.0)), t0);
+  auto outside_angle = make_observation(0.011);
+  outside_angle.detection_index = 10;
+  auto outside_range = make_observation(0.0, 0.0, 5.06);
+  outside_range.detection_index = 20;
+  auto eligible = make_observation(0.009, 0.0, 5.04);
+  eligible.detection_index = 30;
+  // 两个被门限排除的候选均比eligible更近，不能靠距离最小绕过门限。
+  const auto result = tracker.update(
+    make_candidates({outside_angle, outside_range, eligible}, 0),
+    t0 + std::chrono::milliseconds(100));
+  assert(result.current_observation);
+  assert(result.current_observation->detection_index == 30);
+}
+
+void test_3d_association_breaks_ties_by_detection_index()
+{
+  for (const bool reverse_order : {false, true}) {
+    TargetTracker tracker(make_config());
+    const TimePoint t0{};
+    (void)tracker.update(make_selection(make_observation(0.0)), t0);
+    auto nearer = make_observation(0.0, 0.0, 4.5);
+    nearer.detection_index = 20;
+    auto farther = make_observation(0.0, 0.0, 5.5);
+    farther.detection_index = 10;
+    const auto selection = reverse_order ? make_candidates({farther, nearer}, 0)
+                                         : make_candidates({nearer, farther}, 0);
+    const auto result = tracker.update(selection, t0 + std::chrono::milliseconds(100));
+    assert(result.current_observation);
+    assert(result.current_observation->detection_index == 10);
+  }
+}
+
 void test_noisy_sequence_and_occlusion_reacquisition()
 {
   auto config = make_config();
@@ -362,6 +485,12 @@ int main()
   test_angle_unwrap_and_short_term_prediction();
   test_temporary_loss_and_reset_after_misses();
   test_prediction_association_resists_candidate_switching();
+  test_association_prefers_3d_proximity_over_angular_proximity();
+  test_3d_association_accounts_for_height();
+  test_3d_association_predicts_to_current_frame_time();
+  test_invalid_position_prediction_falls_back_to_last_measurement();
+  test_3d_association_keeps_existing_gates();
+  test_3d_association_breaks_ties_by_detection_index();
   test_association_gate_treats_unrelated_candidate_as_miss();
   test_noisy_sequence_and_occlusion_reacquisition();
   test_stale_prediction_does_not_drive_association();

@@ -270,11 +270,38 @@ void test_follow_uses_current_observation_in_world_without_rotation_lock()
   assert(!no_feedback.aim.valid);
 }
 
+void test_follow_associates_by_predicted_3d_position_after_pnp()
+{
+  auto config = make_pipeline_config();
+  config.follow_target = true;
+  config.tracker.min_confirmed_updates = 1;
+  config.tracker.max_association_range_error_m = 2.0;
+  AutoAimPipeline pipeline(config);
+  const TimePoint t0{};
+  const cv::Matx33d orientation = cv::Matx33d::eye();
+  (void)pipeline.process(make_detection(config.pose_solver, 0.0, 0.0, false),
+    t0, 0, 22.0, orientation);
+
+  srm::vision::DetectionResult detections;
+  detections.armors.push_back(make_armor(config.pose_solver, gimbal_position(0.0, 0.0, 6.0), 1));
+  detections.armors.push_back(make_armor(config.pose_solver, gimbal_position(0.04, 0.0, 5.02), 2));
+  const auto result = pipeline.process(
+    detections, t0 + std::chrono::milliseconds(100), 1, 22.0, orientation);
+  assert(result.selection.selected());
+  assert(result.selection.selected()->detection_index == 0);
+  assert(result.tracking.current_observation);
+  assert(result.tracking.current_observation->detection_index == 1);
+  assert(result.tracking.state == TargetTrackState::tracking);
+  assert(result.aim.valid);
+  assert(std::abs(result.aim.yaw_rad - 0.04) < 0.001);
+}
+
 }  // namespace
 
 int main()
 {
   test_follow_uses_current_observation_in_world_without_rotation_lock();
+  test_follow_associates_by_predicted_3d_position_after_pnp();
   test_complete_synthetic_sequence();
   test_bad_bullet_speed_does_not_break_tracking();
   test_reset_clears_cross_frame_state();
