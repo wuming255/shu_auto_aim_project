@@ -60,6 +60,8 @@ struct SafetyControllerConfig
 
   // 默认关闭视觉开火。即使打开，也仍需调用方显式提供 visual_fire_intent。
   bool allow_visual_fire = false;
+  // 仅仿真follow启用；短失有效预测可瞄准和开火，到位门与输入新鲜度仍生效。
+  bool allow_follow_prediction_fire = false;
 
   // 只有明确启用时，才用正式状态帧中的 yaw/pitch 反馈作为开火到位门。
   bool require_gimbal_feedback_for_fire = false;

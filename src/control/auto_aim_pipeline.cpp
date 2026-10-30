@@ -13,7 +13,8 @@ AutoAimPipeline::AutoAimPipeline(AutoAimPipelineConfig config)
   target_tracker_(config_.tracker),
   aim_compensator_(config_.aim_compensator),
   rotating_target_(config_.rotation,config_.pose_solver),
-  fixed_guard_(config_.fixed_guard)
+  fixed_guard_(config_.fixed_guard),
+  vehicle_target_(config_.tracker,config_.pose_solver,config_.rotation.mounting_tilt_rad.value_or(0.2617993877991494))
 {
 }
 
@@ -21,13 +22,23 @@ AutoAimFrameResult AutoAimPipeline::process(
   const vision::DetectionResult & detections,
   std::chrono::steady_clock::time_point timestamp,
   std::uint64_t frame_sequence, double bullet_speed_m_s,
-  std::optional<cv::Matx33d> rotation_gimbal_to_world)
+  std::optional<cv::Matx33d> rotation_gimbal_to_world, const cv::Vec3d & muzzle_world)
 {
   AutoAimFrameResult result;
   result.frame_sequence = frame_sequence;
   result.timestamp = timestamp;
   result.selection = target_selector_.select(
     detections, pose_solver_, timestamp, frame_sequence);
+  if (config_.follow_target && config_.follow_vehicle_model) {
+    result.follow_target = true;
+    if (!rotation_gimbal_to_world) {
+      result.aim.error = "follow requires fresh confirmed gimbal feedback";
+      return result;
+    }
+    vehicle_target_.update(result.selection,timestamp,*rotation_gimbal_to_world,muzzle_world);
+    predict_follow(result,timestamp,muzzle_world,bullet_speed_m_s);
+    return result;
+  }
   if (config_.follow_target) {
     result.follow_target = true;
     result.rotation.status = "non_firing_follow";
@@ -115,7 +126,49 @@ void AutoAimPipeline::reset() noexcept
   target_tracker_.reset();
   rotating_target_.reset();
   fixed_guard_.reset();
+  vehicle_target_.reset();
+  follow_plate_ = -1;
   rotation_last_observation_.reset();
+}
+
+void AutoAimPipeline::predict_follow(AutoAimFrameResult & result,
+  std::chrono::steady_clock::time_point time, const cv::Vec3d & muzzle_world,
+  double bullet_speed_m_s)
+{
+  result.tracking = vehicle_target_.estimate(time);
+  result.rotation.status = result.tracking.status;
+  result.aim = {};
+  result.aim.bullet_speed_m_s = bullet_speed_m_s;
+  if (!result.tracking.prediction_valid) {
+    result.aim.error = result.tracking.status;
+    return;
+  }
+  // Forecast the nonlinear plate orbit, then solve the static predicted point.
+  // The old tracker's 50 ms horizon and angular linear extrapolation are not added.
+  const double base = vehicle_target_.prediction_seconds(time)+
+    config_.aim_compensator.additional_latency_seconds;
+  const int nearest = vehicle_target_.choose_plate(base,muzzle_world,follow_plate_);
+  double flight = cv::norm(vehicle_target_.armor_position(base,nearest)-muzzle_world)/bullet_speed_m_s;
+  const int plate = vehicle_target_.choose_plate(base+flight,muzzle_world,follow_plate_);
+  follow_plate_ = plate;
+  auto target = result.tracking;
+  target.state = vision::TargetTrackState::tracking;
+  target.yaw_velocity_rad_s = target.pitch_velocity_rad_s = target.range_velocity_m_s = 0;
+  for (std::size_t iteration=0; iteration<=config_.aim_compensator.max_iterations; ++iteration) {
+    const auto position = vehicle_target_.armor_position(base+flight,plate)-muzzle_world;
+    target.predicted_yaw_rad = std::atan2(position[1],position[0]);
+    target.predicted_pitch_rad = std::atan2(position[2],std::hypot(position[0],position[1]));
+    target.predicted_range_m = cv::norm(position);
+    result.aim = aim_compensator_.solve(target,bullet_speed_m_s);
+    if (!result.aim.valid) return;
+    const double next = result.aim.flight_time_s;
+    if (std::abs(next-flight) < config_.aim_compensator.convergence_tolerance_seconds) break;
+    flight = next;
+  }
+  result.aim.total_prediction_lead_s = base+result.aim.flight_time_s;
+  result.tracking.predicted_yaw_rad = target.predicted_yaw_rad;
+  result.tracking.predicted_pitch_rad = target.predicted_pitch_rad;
+  result.tracking.predicted_range_m = target.predicted_range_m;
 }
 
 const AutoAimPipelineConfig & AutoAimPipeline::config() const noexcept

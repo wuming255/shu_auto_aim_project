@@ -122,6 +122,9 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   if (!input.processing_ok) add_reason(output, SafetyReason::processing_failed);
 
   const auto * pipeline = input.pipeline_result;
+  const bool follow_prediction = config_.allow_follow_prediction_fire && pipeline &&
+    pipeline->follow_target && pipeline->tracking.prediction_valid &&
+    pipeline->tracking.state == vision::TargetTrackState::temporarily_lost;
   const bool base_inputs_valid =
     input.transport_running && input.transport_connected && input.frame_available &&
     timestamp_fresh(input.now, input.frame_timestamp, config_.max_frame_age) &&
@@ -133,7 +136,7 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   } else {
     const bool guard_hold = pipeline->guard_command_valid &&
       pipeline->tracking.state == vision::TargetTrackState::temporarily_lost;
-    if (pipeline->tracking.state != vision::TargetTrackState::tracking && !guard_hold) {
+    if (pipeline->tracking.state != vision::TargetTrackState::tracking && !guard_hold && !follow_prediction) {
       add_reason(output, SafetyReason::target_unavailable);
     }
     if (pipeline->guard_command_valid && !pipeline->guard_target_visible) {
@@ -152,7 +155,8 @@ SafetyOutput SafetyController::decide(const SafetyInput & input) const
   }
 
   const bool aim_valid =
-    base_inputs_valid && pipeline != nullptr && pipeline->tracking.state == vision::TargetTrackState::tracking &&
+    base_inputs_valid && pipeline != nullptr &&
+    (pipeline->tracking.state == vision::TargetTrackState::tracking || follow_prediction) &&
     pipeline->aim.valid && finite(pipeline->aim.yaw_deg) && finite(pipeline->aim.pitch_deg) &&
     finite(pipeline->aim.bullet_speed_m_s) &&
     pipeline->aim.bullet_speed_m_s >= config_.min_bullet_speed_m_s &&

@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(shu_auto_aim LANGUAGES CXX)
 
+find_package(Eigen3 REQUIRED NO_MODULE)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -143,6 +145,7 @@ target_compile_options(srm_target_selector PRIVATE
 add_library(srm_target_tracker STATIC
   src/vision/target_tracker.cpp
   src/vision/rotating_target.cpp
+  src/vision/vehicle_target.cpp
 )
 
 target_include_directories(srm_target_tracker
@@ -153,6 +156,7 @@ target_include_directories(srm_target_tracker
 
 target_link_libraries(srm_target_tracker
   PUBLIC
+    Eigen3::Eigen
     srm_target_selector
     ${OpenCV_LIBS}
 )

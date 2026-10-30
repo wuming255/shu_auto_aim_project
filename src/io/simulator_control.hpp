@@ -67,6 +67,8 @@ private:
   };
   void reset_pipelines();
   void prepare_pipelines(const Geometry & geometry, const rm_interfaces::msg::VisionReceiveData & feedback);
+  cv::Vec3d muzzle_world(const Geometry & geometry,
+    const rm_interfaces::msg::VisionReceiveData & feedback) const;
   std::optional<rm_interfaces::msg::VisionReceiveData> feedback_at(std::int64_t stamp_ns) const;
   SimulatorControlConfig config_;
   control::SafetyController safety_;

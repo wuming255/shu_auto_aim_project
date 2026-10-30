@@ -11,6 +11,7 @@ namespace srm::io
 namespace
 {
 constexpr double to_rad = 3.14159265358979323846 / 180.0;
+constexpr double follow_bullet_speed_m_s = 25.0;
 const cv::Matx33d optical_to_flu(0, 0, 1, -1, 0, 0, 0, -1, 0);
 
 std::int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
@@ -68,6 +69,7 @@ control::SafetyControllerConfig safety_config(const SimulatorControlConfig & con
   result.max_frame_age = std::chrono::milliseconds(static_cast<int>(config.frame_max_age_sec*1000));
   result.max_transport_state_age = std::chrono::milliseconds(static_cast<int>(config.feedback_max_age_sec*1000));
   result.allow_visual_fire = config.allow_visual_fire;
+  result.allow_follow_prediction_fire = config.aim_mode == "follow";
   result.require_gimbal_feedback_for_fire = true;
   result.max_gimbal_error_deg = 0.7;
   return result;
@@ -208,12 +210,20 @@ void SimulatorControl::prepare_pipelines(
     config.pose_solver.feature_size_m = cv::Size2d(type ? config_.large_feature_width_m :
       config_.small_feature_width_m, config_.feature_height_m);
     config.follow_target = config_.aim_mode == "follow";
+    config.follow_vehicle_model = config.follow_target;
     config.rotation.enabled = config_.aim_mode == "guard";
     config.rotation.feedback_frame_confirmed = true;
     config.rotation.mounting_tilt_rad = config_.mounting_tilt_rad;
     config.aim_compensator.additional_latency_seconds = config_.additional_latency_sec;
     pipelines_[type] = std::make_unique<control::AutoAimPipeline>(config);
   }
+}
+
+cv::Vec3d SimulatorControl::muzzle_world(const Geometry & geometry,
+  const rm_interfaces::msg::VisionReceiveData & feedback) const
+{
+  // The local translation is in the raw gimbal basis (not barrel-aligned TF).
+  return geometry.origin_world+raw_orientation(feedback)*geometry.muzzle_local;
 }
 
 void SimulatorControl::invalidate_frame()
@@ -247,7 +257,8 @@ void SimulatorControl::process(
       }
     }
   }
-  if (!feedback || feedback->bullet_speed == 0 || feedback->bullet_speed > 100) {
+  if (!feedback || (config_.aim_mode != "follow" &&
+      (feedback->bullet_speed == 0 || feedback->bullet_speed > 100))) {
     status_ = "waiting_for_fresh_feedback_tf_and_speed";
     invalidate_frame();
     return;
@@ -266,15 +277,15 @@ void SimulatorControl::process(
   }
   std::array<control::AutoAimFrameResult, 2> results;
   const auto motion_time = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(source_stamp_ns));
+  const double bullet_speed = config_.aim_mode == "follow" ? follow_bullet_speed_m_s : feedback->bullet_speed;
   for (std::size_t type = 0; type < pipelines_.size(); ++type) {
     results[type] = pipelines_[type]->process(detections[type], motion_time, frame.sequence,
-      feedback->bullet_speed, geometry->barrel_to_world);
+      bullet_speed, geometry->barrel_to_world, muzzle_world(*geometry,*feedback));
   }
   const std::size_t other = 1-selected_type_;
   if ((!results[selected_type_].tracking.has_current_measurement && results[other].tracking.has_current_measurement) ||
       (!results[selected_type_].aim.valid && results[other].aim.valid)) selected_type_ = other;
   result_ = std::move(results[selected_type_]);
-  if (result_->follow_target) result_->rotation.status = "follow_current_observation";
   selected_pose_ = pipelines_[selected_type_]->config().pose_solver;
   ++pipeline_frames_;
   status_ = result_->aim.valid ? "aim_ready" : result_->aim.error;
@@ -294,6 +305,24 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
 {
   auto message = cancellation(now_ros_ns);
   const auto now = std::chrono::steady_clock::now();
+  if (config_.aim_mode == "follow" && result_ && pipelines_[selected_type_] && !geometry_.empty()) {
+    // TF and feedback arrive independently: use the latest complete pair, not a
+    // mixed-pose pair and never a cached prediction whose expiry is not refreshed.
+    const Geometry * matched = nullptr;
+    std::optional<rm_interfaces::msg::VisionReceiveData> matched_feedback;
+    for (auto iterator=geometry_.rbegin(); iterator!=geometry_.rend(); ++iterator) {
+      if (!fresh(now_ros_ns,iterator->stamp_ns,config_.feedback_max_age_sec)) continue;
+      auto feedback = feedback_at(iterator->stamp_ns);
+      if (feedback && stamp_ns(feedback->header.stamp) == iterator->stamp_ns) {
+        matched = &*iterator; matched_feedback = feedback; break;
+      }
+    }
+    if (!matched) { invalidate_frame(); return message; }
+    const auto motion_time = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now_ros_ns));
+    pipelines_[selected_type_]->predict_follow(*result_,motion_time,
+      muzzle_world(*matched,*matched_feedback),follow_bullet_speed_m_s);
+    status_ = result_->aim.valid ? result_->tracking.status : result_->aim.error;
+  }
   control::SafetyInput input;
   input.now = now;
   input.frame_available = result_.has_value();
@@ -307,14 +336,16 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
     const auto & feedback = feedback_.back();
     protocol::IncomingState state;
     state.gimbal = angles(raw_orientation(feedback) * *mount_);
-    state.shoot.bullet_speed = feedback.bullet_speed;
+    state.shoot.bullet_speed = config_.aim_mode == "follow" ? follow_bullet_speed_m_s : feedback.bullet_speed;
     input.transport_state = state;
     const auto age = now_ros_ns-stamp_ns(feedback.header.stamp);
     input.transport_state_timestamp = now-std::chrono::nanoseconds(age);
-    input.processing_ok = input.processing_ok && feedback.bullet_speed > 0 && feedback.bullet_speed <= 100;
+    input.processing_ok = input.processing_ok &&
+      (config_.aim_mode == "follow" || (feedback.bullet_speed > 0 && feedback.bullet_speed <= 100));
   }
-  input.visual_fire_intent = result_ && result_->tracking.has_current_measurement &&
-    (result_->follow_target || (result_->guard_target_visible && result_->fire_window_valid));
+  input.visual_fire_intent = result_ &&
+    (result_->follow_target ? result_->tracking.prediction_valid :
+      (result_->tracking.has_current_measurement && result_->guard_target_visible && result_->fire_window_valid));
   last_safety_ = safety_.decide(input);
   if (!last_safety_.aim_command_valid || !mount_ || !result_) {
     pulse_until_ns_ = 0;

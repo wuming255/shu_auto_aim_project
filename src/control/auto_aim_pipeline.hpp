@@ -10,6 +10,7 @@
 #include "vision/target_selector.hpp"
 #include "vision/target_tracker.hpp"
 #include "vision/rotating_target.hpp"
+#include "vision/vehicle_target.hpp"
 
 namespace srm::control
 {
@@ -23,7 +24,8 @@ struct AutoAimPipelineConfig
   AimCompensatorConfig aim_compensator;
   vision::RotatingTargetConfig rotation;
   FixedGuardConfig fixed_guard;
-  bool follow_target = false;  // 非开火联调：当前观测 + 反馈参考系，不等待旋转模型。
+  bool follow_target = false;  // 当前观测跟随；仿真可另启用整车预测。
+  bool follow_vehicle_model = false;  // 仿真专用：惯性系四甲EKF、命中时刻预测。
 };
 
 struct AutoAimFrameResult
@@ -53,7 +55,13 @@ public:
     const vision::DetectionResult & detections,
     std::chrono::steady_clock::time_point timestamp,
     std::uint64_t frame_sequence, double bullet_speed_m_s,
-    std::optional<cv::Matx33d> rotation_gimbal_to_world = std::nullopt);
+    std::optional<cv::Matx33d> rotation_gimbal_to_world = std::nullopt,
+    const cv::Vec3d & muzzle_world = {});
+
+  // 同一时间轴上的命令时刻重新预测；不修改滤波器、不刷新观测时间。
+  void predict_follow(AutoAimFrameResult & result,
+    std::chrono::steady_clock::time_point time, const cv::Vec3d & muzzle_world,
+    double bullet_speed_m_s);
 
   void reset() noexcept;
 
@@ -71,6 +79,8 @@ private:
   AimCompensator aim_compensator_;
   vision::RotatingTarget rotating_target_;
   FixedGuardController fixed_guard_;
+  vision::VehicleTarget vehicle_target_;
+  int follow_plate_ = -1;
   std::optional<vision::TargetObservation> rotation_last_observation_;
 };
 

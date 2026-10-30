@@ -54,7 +54,10 @@ cv::Mat draw_tracking_debug(const cv::Mat & drawing,
             << " omega=" << rotation.angular_velocity_rad_s << "rad/s "
             << (rotation.reliable ? "RELIABLE" : "DIAGNOSTIC") << " ";
   }
-  quality << "prediction=" << (rotation.prediction_valid ? "VALID" : "INVALID");
+  quality << "prediction=" << ((result.follow_target ? track.prediction_valid : rotation.prediction_valid) ? "VALID" : "INVALID");
+  if (result.follow_target && result.aim.valid) {
+    quality << " lead=" << result.aim.total_prediction_lead_s << "s";
+  }
   if (rotation.prediction_valid && rotation.initialized && rotation.stable_frame_valid) {
     for (int plate = 0; plate < 4; ++plate) {
       const auto pixel = project(rotation.armor_position(0,plate),rotation,pose);
