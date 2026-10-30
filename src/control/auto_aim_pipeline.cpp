@@ -36,7 +36,11 @@ AutoAimFrameResult AutoAimPipeline::process(
       return result;
     }
     vehicle_target_.update(result.selection,timestamp,*rotation_gimbal_to_world,muzzle_world);
-    predict_follow(result,timestamp,muzzle_world,bullet_speed_m_s);
+    const auto generation = vehicle_target_.diagnostics(timestamp).generation;
+    if (generation != follow_generation_) {
+      follow_plate_ = -1; follow_command_yaw_.reset(); follow_generation_ = generation;
+    }
+    forecast_follow(result,timestamp,muzzle_world,bullet_speed_m_s);
     return result;
   }
   if (config_.follow_target) {
@@ -128,6 +132,8 @@ void AutoAimPipeline::reset() noexcept
   fixed_guard_.reset();
   vehicle_target_.reset();
   follow_plate_ = -1;
+  follow_command_yaw_.reset();
+  follow_generation_ = vehicle_target_.diagnostics({}).generation;
   rotation_last_observation_.reset();
 }
 
@@ -135,13 +141,40 @@ void AutoAimPipeline::predict_follow(AutoAimFrameResult & result,
   std::chrono::steady_clock::time_point time, const cv::Vec3d & muzzle_world,
   double bullet_speed_m_s)
 {
+  forecast_follow(result,time,muzzle_world,bullet_speed_m_s);
+  if (!result.aim.valid) {
+    if (!result.tracking.prediction_valid) { follow_plate_ = -1; follow_command_yaw_.reset(); }
+    return;
+  }
+  const int incoming = (follow_plate_+(result.follow_model.angular_velocity_rad_s >= 0 ? 3 : 1))%4;
+  result.follow_selection_reason = follow_plate_ < 0 ? "command_lock" :
+    (follow_plate_ == result.follow_plate ? "hold_at_impact" :
+      (result.follow_plate == incoming ? "outgoing_to_incoming" : "reselect_at_impact"));
+  if (follow_command_yaw_) result.follow_yaw_step_rad = std::remainder(result.aim.yaw_rad-*follow_command_yaw_,2*CV_PI);
+  follow_plate_ = result.follow_plate;
+  follow_command_yaw_ = result.aim.yaw_rad;
+}
+
+void AutoAimPipeline::forecast_follow(AutoAimFrameResult & result,
+  std::chrono::steady_clock::time_point time, const cv::Vec3d & muzzle_world,
+  double bullet_speed_m_s) const
+{
   result.tracking = vehicle_target_.estimate(time);
+  result.follow_model = vehicle_target_.diagnostics(time);
+  result.follow_plate = -1;
+  result.follow_selection_reason = "preview";
+  result.follow_yaw_step_rad = 0;
   result.rotation.status = result.tracking.status;
   result.aim = {};
   result.aim.bullet_speed_m_s = bullet_speed_m_s;
   if (!result.tracking.prediction_valid) {
+    result.follow_selection_reason = "model_unavailable";
     result.aim.error = result.tracking.status;
     return;
+  }
+  if (!std::isfinite(bullet_speed_m_s) || bullet_speed_m_s < config_.aim_compensator.min_bullet_speed_m_s ||
+      bullet_speed_m_s > config_.aim_compensator.max_bullet_speed_m_s) {
+    result.aim.error = "invalid follow bullet speed"; return;
   }
   // Forecast the nonlinear plate orbit, then solve the static predicted point.
   // The old tracker's 50 ms horizon and angular linear extrapolation are not added.
@@ -150,7 +183,6 @@ void AutoAimPipeline::predict_follow(AutoAimFrameResult & result,
   const int nearest = vehicle_target_.choose_plate(base,muzzle_world,follow_plate_);
   double flight = cv::norm(vehicle_target_.armor_position(base,nearest)-muzzle_world)/bullet_speed_m_s;
   const int plate = vehicle_target_.choose_plate(base+flight,muzzle_world,follow_plate_);
-  follow_plate_ = plate;
   auto target = result.tracking;
   target.state = vision::TargetTrackState::tracking;
   target.yaw_velocity_rad_s = target.pitch_velocity_rad_s = target.range_velocity_m_s = 0;
@@ -163,9 +195,13 @@ void AutoAimPipeline::predict_follow(AutoAimFrameResult & result,
     if (!result.aim.valid) return;
     const double next = result.aim.flight_time_s;
     if (std::abs(next-flight) < config_.aim_compensator.convergence_tolerance_seconds) break;
+    if (iteration == config_.aim_compensator.max_iterations) {
+      result.aim.valid = false; result.aim.error = "follow impact iteration did not converge"; return;
+    }
     flight = next;
   }
   result.aim.total_prediction_lead_s = base+result.aim.flight_time_s;
+  result.follow_plate = plate;
   result.tracking.predicted_yaw_rad = target.predicted_yaw_rad;
   result.tracking.predicted_pitch_rad = target.predicted_pitch_rad;
   result.tracking.predicted_range_m = target.predicted_range_m;

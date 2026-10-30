@@ -52,7 +52,12 @@ public:
       prepare_parent(log_path);
       command_log_.open(log_path);
       if (!command_log_) throw std::runtime_error("cannot open simulator command log: " + log_path);
-      command_log_ << "stamp_ns,target_state,yaw_deg,pitch_deg,delta_yaw_deg,delta_pitch_deg,range_m,track,aim_valid,safety,status\n";
+      command_log_ << "stamp_ns,target_state,yaw_deg,pitch_deg,delta_yaw_deg,delta_pitch_deg,range_m,track,aim_valid,safety,status,"
+        "model_generation,model_ready,cx_m,cy_m,cz_m,radius_m,alternate_radius_m,alternate_height_m,phase_rad,omega_rad_s,"
+        "omega_std_rad_s,associated_plate,aim_plate,selection_reason,reset_reason,observation_age_s,flight_time_s,"
+        "prediction_lead_s,yaw_step_rad,fit_span_s,normal_span_rad,position_rms_m,phase_rms_rad,pose_ambiguous,fit_status,"
+        "normalized_position_error,normalized_phase_error,observed_x,observed_y,observed_z,observed_phase,fit_omega_rad_s,fit_omega_std_rad_s\n";
+      command_log_ << std::setprecision(12);
     }
     if (max_frames_ < 0 || debug_every_ < 1 || !std::isfinite(idle_timeout_sec_) || idle_timeout_sec_ < 0) {
       throw std::invalid_argument("max_frames/idle_timeout_sec must be nonnegative; debug_every must be positive");
@@ -194,7 +199,21 @@ private:
         << command.yaw << ',' << command.pitch << ',' << command.delta_yaw << ',' << command.delta_pitch << ','
         << command.target_distance << ',' << (result ? srm::vision::to_string(result->tracking.state) : "lost") << ','
         << (result && result->aim.valid) << ',' << std::quoted(control_->safety().summary) << ','
-        << std::quoted(control_->status()) << '\n';
+        << std::quoted(control_->status());
+      const auto model = result ? result->follow_model : srm::vision::VehicleTargetDiagnostics{};
+      command_log_ << ',' << model.generation << ',' << model.initialized << ','
+        << model.center_world_m[0] << ',' << model.center_world_m[1] << ',' << model.center_world_m[2] << ','
+        << model.radius_m << ',' << model.alternate_radius_m << ',' << model.alternate_height_m << ','
+        << model.phase_rad << ',' << model.angular_velocity_rad_s << ',' << model.omega_std_rad_s << ','
+        << model.associated_plate << ',' << (result ? result->follow_plate : -1) << ','
+        << std::quoted(result ? result->follow_selection_reason : "no_result") << ','
+        << std::quoted(model.reset_reason) << ',' << model.observation_age_s << ','
+        << (result ? result->aim.flight_time_s : 0) << ',' << (result ? result->aim.total_prediction_lead_s : 0) << ','
+        << (result ? result->follow_yaw_step_rad : 0) << ',' << model.fit_span_s << ',' << model.normal_span_rad << ','
+        << model.position_rms_m << ',' << model.phase_rms_rad << ',' << model.pose_ambiguous << ','
+        << std::quoted(model.fit_status) << ',' << model.normalized_position_error << ',' << model.normalized_phase_error << ','
+        << model.observed_position_world_m[0] << ',' << model.observed_position_world_m[1] << ',' << model.observed_position_world_m[2] << ','
+        << model.observed_phase_rad << ',' << model.fit_angular_velocity_rad_s << ',' << model.fit_omega_std_rad_s << '\n';
       if (!command_log_) throw std::runtime_error("cannot write simulator command log");
     }
   }
@@ -322,7 +341,7 @@ void usage()
     "  control_enabled      true (false restores recognition-only mode)\n"
     "  feedback_topic       /vision_receive_data; tf_topic=/tf\n"
     "  command_topic        /vision_send_data (50 Hz; world gimbal angles in degrees)\n"
-    "  aim_mode             follow (inertial four-plate EKF + intercept) or guard (rotation prediction/fixed guard)\n"
+    "  aim_mode             follow (fixed-center eight-state EKF + intercept) or guard (rotation prediction/fixed guard)\n"
     "                       follow: fixed 25 m/s; coast/allow fire up to 150 ms after last accepted observation\n"
     "  enemy_color          blue (or red)\n"
     "  allow_visual_fire    false (true enables simulated fire after safety/settle gates)\n"

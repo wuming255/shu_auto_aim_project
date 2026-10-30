@@ -42,6 +42,10 @@ struct AutoAimFrameResult
   bool guard_target_visible = false;
   bool fire_window_valid = false;
   bool follow_target = false;  // aim 为世界系绝对角，数学 pitch 向上为正。
+  vision::VehicleTargetDiagnostics follow_model;
+  int follow_plate = -1;
+  std::string follow_selection_reason;
+  double follow_yaw_step_rad = 0;
 };
 
 class AutoAimPipeline final
@@ -72,6 +76,10 @@ public:
   const AimCompensator & aim_compensator() const noexcept;
 
 private:
+  // Preview and ballistic iterations are pure with respect to the command lock.
+  void forecast_follow(AutoAimFrameResult & result,
+    std::chrono::steady_clock::time_point time, const cv::Vec3d & muzzle_world,
+    double bullet_speed_m_s) const;
   AutoAimPipelineConfig config_;
   vision::ArmorPoseSolver pose_solver_;
   vision::TargetSelector target_selector_;
@@ -81,6 +89,8 @@ private:
   FixedGuardController fixed_guard_;
   vision::VehicleTarget vehicle_target_;
   int follow_plate_ = -1;
+  std::size_t follow_generation_ = 0;
+  std::optional<double> follow_command_yaw_;
   std::optional<vision::TargetObservation> rotation_last_observation_;
 };
 

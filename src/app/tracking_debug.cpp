@@ -58,6 +58,13 @@ cv::Mat draw_tracking_debug(const cv::Mat & drawing,
   if (result.follow_target && result.aim.valid) {
     quality << " lead=" << result.aim.total_prediction_lead_s << "s";
   }
+  if (result.follow_target && result.follow_model.radius_m > 0) {
+    const auto & follow = result.follow_model;
+    model << std::fixed << std::setprecision(3) << " r=" << follow.radius_m << '/' << follow.alternate_radius_m
+          << " w=" << follow.angular_velocity_rad_s << " phase=" << follow.phase_rad;
+    quality << " assoc=" << follow.associated_plate << " aim=" << result.follow_plate
+            << " age=" << follow.observation_age_s << " gen=" << follow.generation;
+  }
   if (rotation.prediction_valid && rotation.initialized && rotation.stable_frame_valid) {
     for (int plate = 0; plate < 4; ++plate) {
       const auto pixel = project(rotation.armor_position(0,plate),rotation,pose);
