@@ -26,6 +26,7 @@ struct SimulatorControlConfig
   double frame_max_age_sec = 0.25;
   double feedback_max_age_sec = 0.25;
   double fire_period_sec = 0.2;
+  std::int64_t follow_gimbal_settle_ms = 20;
   double pitch_limit_deg = 45.0;
   double small_feature_width_m = 0.1258;
   double large_feature_width_m = 0.2208;
@@ -53,6 +54,7 @@ public:
   const control::SafetyOutput & safety() const noexcept { return last_safety_; }
   const std::optional<vision::PoseSolverConfig> & pose_config() const noexcept { return selected_pose_; }
   const std::string & status() const noexcept { return status_; }
+  const std::string & fire_status() const noexcept { return fire_status_; }
   std::uint64_t pipeline_frames() const noexcept { return pipeline_frames_; }
   std::uint64_t rejected_feedback() const noexcept { return rejected_feedback_; }
   std::uint64_t rejected_transforms() const noexcept { return rejected_transforms_; }
@@ -86,6 +88,7 @@ private:
   std::size_t selected_type_ = 0;
   std::uint64_t pipeline_frames_ = 0, rejected_feedback_ = 0, rejected_transforms_ = 0;
   std::string status_ = "waiting_for_feedback_and_tf";
+  std::string fire_status_ = "aim_unavailable";
 };
 }  // namespace srm::io
 #endif

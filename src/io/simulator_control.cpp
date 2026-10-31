@@ -72,6 +72,12 @@ control::SafetyControllerConfig safety_config(const SimulatorControlConfig & con
   result.allow_follow_prediction_fire = config.aim_mode == "follow";
   result.require_gimbal_feedback_for_fire = true;
   result.max_gimbal_error_deg = 0.7;
+  if (config.follow_gimbal_settle_ms < 1 || config.follow_gimbal_settle_ms > 1000) {
+    throw std::invalid_argument("follow_gimbal_settle_ms must be in [1, 1000]");
+  }
+  if (config.aim_mode == "follow") {
+    result.min_gimbal_settle_time = std::chrono::milliseconds(config.follow_gimbal_settle_ms);
+  }
   return result;
 }
 }  // namespace
@@ -230,6 +236,7 @@ void SimulatorControl::invalidate_frame()
 {
   result_.reset();
   pulse_until_ns_ = 0;
+  fire_status_ = "aim_unavailable";
 }
 
 void SimulatorControl::process(
@@ -304,6 +311,7 @@ rm_interfaces::msg::VisionSendData SimulatorControl::cancellation(std::int64_t n
 rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ros_ns)
 {
   auto message = cancellation(now_ros_ns);
+  fire_status_ = "aim_unavailable";
   const auto now = std::chrono::steady_clock::now();
   if (config_.aim_mode == "follow" && result_ && pipelines_[selected_type_] && !geometry_.empty()) {
     // TF and feedback arrive independently: use the latest complete pair, not a
@@ -317,7 +325,7 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
         matched = &*iterator; matched_feedback = feedback; break;
       }
     }
-    if (!matched) { invalidate_frame(); return message; }
+    if (!matched) { invalidate_frame(); fire_status_ = "feedback_tf_unavailable"; return message; }
     const auto motion_time = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now_ros_ns));
     pipelines_[selected_type_]->predict_follow(*result_,motion_time,
       muzzle_world(*matched,*matched_feedback),follow_bullet_speed_m_s);
@@ -347,6 +355,7 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
     (result_->follow_target ? result_->tracking.prediction_valid :
       (result_->tracking.has_current_measurement && result_->guard_target_visible && result_->fire_window_valid));
   last_safety_ = safety_.decide(input);
+  fire_status_ = last_safety_.summary;
   if (!last_safety_.aim_command_valid || !mount_ || !result_) {
     pulse_until_ns_ = 0;
     return message;
@@ -356,6 +365,7 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
   if (std::abs(target.pitch) > config_.pitch_limit_deg || !std::isfinite(result_->aim.target_range_m) ||
       result_->aim.target_range_m <= 0) {
     status_ = "target_outside_simulator_gimbal_limits";
+    fire_status_ = "gimbal_limits";
     pulse_until_ns_ = 0;
     return message;
   }
@@ -371,7 +381,10 @@ rm_interfaces::msg::VisionSendData SimulatorControl::command(std::int64_t now_ro
       pulse_until_ns_ = now_ros_ns+40000000LL;
       next_fire_ns_ = now_ros_ns+static_cast<std::int64_t>(config_.fire_period_sec*1e9);
     }
-    if (now_ros_ns < pulse_until_ns_) message.target_state = 2;
+    if (now_ros_ns < pulse_until_ns_) {
+      message.target_state = 2;
+      fire_status_ = "fire_pulse";
+    } else fire_status_ = "fire_cooldown";
   } else pulse_until_ns_ = 0;
   return message;
 }

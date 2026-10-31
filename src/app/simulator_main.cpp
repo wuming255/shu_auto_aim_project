@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -56,7 +57,7 @@ public:
         "model_generation,model_ready,cx_m,cy_m,cz_m,radius_m,alternate_radius_m,alternate_height_m,phase_rad,omega_rad_s,"
         "omega_std_rad_s,associated_plate,aim_plate,selection_reason,reset_reason,observation_age_s,flight_time_s,"
         "prediction_lead_s,yaw_step_rad,fit_span_s,normal_span_rad,position_rms_m,phase_rms_rad,pose_ambiguous,fit_status,"
-        "normalized_position_error,normalized_phase_error,observed_x,observed_y,observed_z,observed_phase,fit_omega_rad_s,fit_omega_std_rad_s\n";
+        "normalized_position_error,normalized_phase_error,observed_x,observed_y,observed_z,observed_phase,fit_omega_rad_s,fit_omega_std_rad_s,fire_status\n";
       command_log_ << std::setprecision(12);
     }
     if (max_frames_ < 0 || debug_every_ < 1 || !std::isfinite(idle_timeout_sec_) || idle_timeout_sec_ < 0) {
@@ -146,6 +147,9 @@ public:
              << "geometry_ready=" << control_->geometry_ready() << '\n'
              << "rejected_feedback=" << control_->rejected_feedback() << '\n'
              << "rejected_transforms=" << control_->rejected_transforms() << '\n';
+      for (const auto & entry : fire_status_counts_) {
+        output << "fire_status_" << entry.first << "_count=" << entry.second << '\n';
+      }
     }
     if (camera_) {
       output << "image_width=" << camera_->geometry.size.width << '\n'
@@ -176,7 +180,8 @@ private:
     config.allow_visual_fire = declare_parameter<bool>("allow_visual_fire", true);
     config.frame_max_age_sec = declare_parameter<double>("frame_max_age_sec", 0.25);
     config.feedback_max_age_sec = declare_parameter<double>("feedback_max_age_sec", 0.25);
-    config.fire_period_sec = declare_parameter<double>("fire_period_sec", 0.2);
+    config.fire_period_sec = declare_parameter<double>("fire_period_sec", config.aim_mode == "follow" ? 0.12 : 0.2);
+    config.follow_gimbal_settle_ms = declare_parameter<std::int64_t>("follow_gimbal_settle_ms", 20);
     config.pitch_limit_deg = declare_parameter<double>("pitch_limit_deg", 45.0);
     config.small_feature_width_m = declare_parameter<double>("small_feature_width_m", 0.1258);
     config.large_feature_width_m = declare_parameter<double>("large_feature_width_m", 0.2208);
@@ -192,6 +197,7 @@ private:
     ++command_count_;
     if (command.target_state) ++aim_command_count_;
     if (command.target_state == 2 && previous_target_state_ != 2) ++fire_pulse_count_;
+    if (control_) ++fire_status_counts_[control_->fire_status()];
     previous_target_state_ = command.target_state;
     if (command_log_.is_open()) {
       const auto & result = control_->result();
@@ -213,7 +219,8 @@ private:
         << model.position_rms_m << ',' << model.phase_rms_rad << ',' << model.pose_ambiguous << ','
         << std::quoted(model.fit_status) << ',' << model.normalized_position_error << ',' << model.normalized_phase_error << ','
         << model.observed_position_world_m[0] << ',' << model.observed_position_world_m[1] << ',' << model.observed_position_world_m[2] << ','
-        << model.observed_phase_rad << ',' << model.fit_angular_velocity_rad_s << ',' << model.fit_omega_std_rad_s << '\n';
+        << model.observed_phase_rad << ',' << model.fit_angular_velocity_rad_s << ',' << model.fit_omega_std_rad_s << ','
+        << std::quoted(control_->fire_status()) << '\n';
       if (!command_log_) throw std::runtime_error("cannot write simulator command log");
     }
   }
@@ -294,9 +301,10 @@ private:
       if (!cv::imwrite(path.string(), drawing)) throw std::runtime_error("cannot save simulator debug image: " + path.string());
     }
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-      "frames=%llu lights=%zu armors=%zu frames_with_armors=%llu control=%s",
+      "frames=%llu lights=%zu armors=%zu frames_with_armors=%llu control=%s fire=%s",
       static_cast<unsigned long long>(processed_frames_), detection.lightbars.size(), detection.armors.size(),
-      static_cast<unsigned long long>(frames_with_armors_), control_ ? control_->status().c_str() : "disabled");
+      static_cast<unsigned long long>(frames_with_armors_), control_ ? control_->status().c_str() : "disabled",
+      control_ ? control_->fire_status().c_str() : "disabled");
     if (viewer_ && !viewer_->show_and_wait(drawing, frame, &detection,
         [] { return !rclcpp::ok() || stop_requested; })) finished_ = true;
     if (max_frames_ > 0 && processed_frames_ >= static_cast<std::uint64_t>(max_frames_)) finished_ = true;
@@ -322,6 +330,7 @@ private:
   std::uint64_t processed_frames_ = 0, frames_with_armors_ = 0, armor_count_ = 0;
   std::uint64_t rejected_images_ = 0, rejected_camera_info_ = 0;
   std::uint64_t command_count_ = 0, aim_command_count_ = 0, fire_pulse_count_ = 0;
+  std::map<std::string, std::uint64_t> fire_status_counts_;
   std::uint8_t previous_target_state_ = 0;
   bool finished_ = false, failed_ = false;
 };
@@ -344,8 +353,10 @@ void usage()
     "  aim_mode             follow (fixed-center eight-state EKF + intercept) or guard (rotation prediction/fixed guard)\n"
     "                       follow: fixed 25 m/s; coast/allow fire up to 150 ms after last accepted observation\n"
     "  enemy_color          blue (or red)\n"
-    "  allow_visual_fire    false (true enables simulated fire after safety/settle gates)\n"
-    "  frame_max_age_sec / feedback_max_age_sec 0.25; fire_period_sec=0.2; pitch_limit_deg=45.0\n"
+    "  allow_visual_fire    true (simulator only; false disables simulated fire)\n"
+    "  frame_max_age_sec / feedback_max_age_sec 0.25; pitch_limit_deg=45.0\n"
+    "  fire_period_sec      follow=0.12, guard=0.2 (minimum 0.12; 40 ms fire pulse)\n"
+    "  follow_gimbal_settle_ms 20 (1..1000; follow only, 0.7 deg error gate; guard=50 ms)\n"
     "  small_feature_width_m=0.1258; large_feature_width_m=0.2208; feature_height_m=0.05961\n"
     "  mounting_tilt_rad=0.2617993877991494; additional_latency_sec=0.0\n"
     "  log_path             empty (optional actual command CSV)\n"
