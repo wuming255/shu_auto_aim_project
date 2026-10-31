@@ -51,11 +51,13 @@ VehicleTarget::VehicleTarget(TargetTrackerConfig config, PoseSolverConfig pose, 
 
 void VehicleTarget::reset() noexcept
 {
-  time_.reset(); seen_.reset(); observation_.reset(); samples_.clear();
+  time_.reset(); seen_.reset(); recovery_started_.reset(); observation_.reset(); samples_.clear();
   updates_ = misses_ = 0; current_ = initialized_ = expired_ = false;
   x_.setZero(); p_.setIdentity();
   const auto generation = diagnostics_.generation+1;
-  diagnostics_ = {}; diagnostics_.generation = generation; diagnostics_.reset_reason = "explicit_reset";
+  const auto reset_count = diagnostics_.reset_count+1;
+  diagnostics_ = {}; diagnostics_.generation = generation; diagnostics_.reset_count = reset_count;
+  diagnostics_.reset_reason = "explicit_reset";
 }
 
 cv::Vec3d VehicleTarget::armor_position(double dt, int plate) const
@@ -82,25 +84,58 @@ void VehicleTarget::predict(double dt)
   p_ = (f*p_*f.transpose()+q).eval();
 }
 
-void VehicleTarget::correct(const cv::Vec3d & position, double phase, int plate, const Eigen::Matrix4d & noise)
+Eigen::Matrix<double,4,8> VehicleTarget::observation_jacobian(double dt, int plate) const
 {
   const bool alternate = plate%2;
-  const double angle = x_[3]+plate*quarter;
+  const double angle = x_[3]+x_[4]*dt+plate*quarter;
   const double radius = x_[5]+(alternate ? x_[6] : 0);
   const double c = std::cos(angle), s = std::sin(angle);
   Eigen::Matrix<double,4,8> h = Eigen::Matrix<double,4,8>::Zero();
   h(0,0) = h(1,1) = h(2,2) = h(3,3) = 1;
   h(0,3) = -radius*s; h(1,3) = radius*c;
+  h(0,4) = -radius*s*dt; h(1,4) = radius*c*dt; h(3,4) = dt;
   h(0,5) = c; h(1,5) = s;
   if (alternate) { h(0,6) = c; h(1,6) = s; h(2,7) = 1; }
+  return h;
+}
+
+bool VehicleTarget::point_prediction_valid(double dt, int plate, const cv::Vec3d & muzzle) const
+{
+  if (plate < 0 || plate >= 4 || !std::isfinite(dt) || dt < 0 || !geometry_valid()) return false;
+  const auto h = observation_jacobian(dt,plate).topRows<3>().eval();
+  const Eigen::Matrix3d covariance = h*p_*h.transpose();
+  const auto point = armor_position(dt,plate)-muzzle;
+  const double range = cv::norm(point);
+  if (!covariance.allFinite() || range < 1e-3) return false;
+  const Eigen::Vector3d ray(point[0]/range,point[1]/range,point[2]/range);
+  const Eigen::Matrix3d transverse = Eigen::Matrix3d::Identity()-ray*ray.transpose();
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigen(transverse*covariance*transverse);
+  // Quality of this plate at impact matters, not identifiability of every radius.
+  // Retain center/radius correlations: a static observed point can be well known
+  // while its rotation center remains uncertain. Three sigma is below 0.7 deg.
+  return eigen.info() == Eigen::Success && eigen.eigenvalues().maxCoeff() < std::pow(range*0.004,2) &&
+    ray.dot(covariance*ray) < 0.09;
+}
+
+bool VehicleTarget::correct(const cv::Vec3d & position, double phase, int plate, const Eigen::Matrix4d & noise)
+{
+  const auto h = observation_jacobian(0,plate);
+  const double angle = x_[3]+plate*quarter;
   const auto predicted = armor_position(0,plate);
   const Eigen::Vector4d residual(position[0]-predicted[0],position[1]-predicted[1],
     position[2]-predicted[2],wrap(phase-angle));
   const Eigen::Matrix4d innovation = h*p_*h.transpose()+noise;
-  const Eigen::Matrix<double,8,4> k = innovation.ldlt().solve(h*p_).transpose();
+  const auto decomposition = innovation.ldlt();
+  if (decomposition.info() != Eigen::Success || !decomposition.isPositive() ||
+      residual.dot(decomposition.solve(residual)) > 25) return false;
+  const Eigen::Matrix<double,8,4> k = decomposition.solve(h*p_).transpose();
+  const State previous_x = x_;
+  const Covariance previous_p = p_;
   x_ += k*residual; x_[3] = wrap(x_[3]);
   const Covariance a = Covariance::Identity()-k*h;
   p_ = (a*p_*a.transpose()+k*noise*k.transpose()).eval();
+  if (!geometry_valid()) { x_=previous_x; p_=previous_p; return false; }
+  return true;
 }
 
 bool VehicleTarget::fit(double now)
@@ -198,6 +233,64 @@ bool VehicleTarget::fit(double now)
   return true;
 }
 
+void VehicleTarget::fit_provisional(double now)
+{
+  if (samples_.size() < 3 || samples_.back().time-samples_.front().time < 0.06) return;
+  // Fit the unknown speed from raw normals, independently of the radius prior.
+  // Replacing the provisional posterior avoids fusing this window twice. Once
+  // full geometry is established, only fresh observations update the EKF.
+  double weight=0,mean_time=0,mean_phase=0;
+  for (const auto & sample : samples_) {
+    const double w=1/sample.noise(3,3);
+    weight+=w; mean_time+=w*(sample.time-now); mean_phase+=w*sample.phase;
+  }
+  mean_time/=weight; mean_phase/=weight;
+  double variance=0,covariance=0;
+  for (const auto & sample : samples_) {
+    const double dt=sample.time-now-mean_time,w=1/sample.noise(3,3);
+    variance+=w*dt*dt; covariance+=w*dt*(sample.phase-mean_phase);
+  }
+  if (variance<1e-6) return;
+  const double omega=covariance/variance,phase=mean_phase-omega*mean_time;
+  if (!std::isfinite(omega) || std::abs(omega)>config_.max_abs_angular_velocity_rad_s) return;
+  Eigen::Matrix2d information=Eigen::Matrix2d::Zero();
+  Eigen::Vector2d rhs=Eigen::Vector2d::Zero();
+  double z_weight[2]{},z_sum[2]{};
+  for (const auto & sample : samples_) {
+    const int group=sample.plate%2;
+    const double angle=phase+omega*(sample.time-now)+sample.plate*quarter;
+    const Eigen::Vector2d normal(std::cos(angle),std::sin(angle));
+    // Phase uncertainty is propagated below with its center correlation.
+    const Eigen::Matrix2d noise=sample.noise.topLeftCorner<2,2>();
+    // The provisional radius is deliberately uncertain. An anisotropic ray
+    // intersection with a fixed radius would move the center meters in depth
+    // to explain centimeters of orbit mismatch. Use scalar quality weights
+    // here and propagate the actual anisotropic noise of that weighted mean.
+    const double position_weight=1/noise.trace();
+    const Eigen::Matrix2d precision=Eigen::Matrix2d::Identity()*position_weight;
+    information+=precision;
+    rhs+=precision*(Eigen::Vector2d(sample.position[0],sample.position[1])-0.2*normal);
+    const double wz=1/sample.noise(2,2);
+    z_weight[group]+=wz; z_sum[group]+=wz*sample.position[2];
+  }
+  const Eigen::Vector2d center=information.ldlt().solve(rhs);
+  if (!center.allFinite()) return;
+  const double z0=z_weight[0]>0 ? z_sum[0]/z_weight[0] : z_sum[1]/z_weight[1];
+  const double z1=z_weight[1]>0 ? z_sum[1]/z_weight[1] : z0;
+  x_ << center[0],center[1],z0,wrap(phase),omega,0.2,0,z1-z0;
+  // Joint batch information retains all center/radius/phase correlations and
+  // lets observed point motion constrain speed even when its normal is noisy.
+  // Two independent radius priors (r and r+dr); an unseen height remains broad.
+  Covariance joint=Covariance::Identity()*1e-8;
+  joint(5,5)+=50; joint(5,6)=joint(6,5)=25; joint(6,6)+=25; joint(7,7)+=25;
+  for (const auto & sample : samples_) {
+    const auto h=observation_jacobian(sample.time-now,sample.plate);
+    joint+=h.transpose()*sample.noise.ldlt().solve(h);
+  }
+  p_=joint.ldlt().solve(Covariance::Identity());
+  p_.diagonal().array()+=1e-8;
+}
+
 bool VehicleTarget::geometry_valid() const
 {
   return x_.allFinite() && p_.allFinite() && x_[5] > 0.03 && x_[5] < 1.0 &&
@@ -214,20 +307,21 @@ void VehicleTarget::update(const TargetSelection & selection,
     const bool expired = seen_ && seconds(time,*seen_) > 1.5;
     reset(); diagnostics_.reset_reason = expired ? "history_expired" : "time_discontinuity";
   } else if (seen_ && !expired_ && seconds(time,*seen_) > config_.max_prediction_age_seconds) {
-    // Output expires at 150 ms. Keep bounded RAW history for observable rebuilding
-    // across sparse views, but invalidate the filter and its plate numbering lock.
-    // A fresh batch fit and fresh confirmation are required before output resumes.
-    initialized_=false; expired_=true; updates_=0;
+    // Output expires independently of the bounded geometry prior. New accepted
+    // observations must reconfirm it; rejected observations never refresh seen_.
+    expired_=true; updates_=0;
+    if (!recovery_started_) recovery_started_=time;
     ++diagnostics_.generation; diagnostics_.reset_reason="observation_expired";
   }
-  // After a long ambiguous gap, four identical plates no longer determine which
-  // quarter-turn was missed. Do not splice that history into a fresh direction.
-  if (seen_ && seconds(time,*seen_)*std::max(std::abs(x_[4]),0.1) >= quarter/2 &&
+  if (time_) predict(seconds(time,*time_));
+  // A large predicted rotation is not ambiguity. An uncertain phase is. Keep
+  // an established speed through short gaps, but cold-start an uncertain prior.
+  if (seen_ && seconds(time,*seen_) > config_.max_prediction_age_seconds &&
+      3*std::sqrt(std::max(0.0,p_(3,3))) >= quarter/2 &&
       std::any_of(selection.observations.begin(),selection.observations.end(),
         [](const auto & observation) { return observation.eligible; })) {
     reset(); diagnostics_.reset_reason="ambiguous_phase_gap";
   }
-  if (time_) predict(seconds(time,*time_));
   time_ = time; current_ = false; diagnostics_.pose_ambiguous = false;
   const double now=epoch(time);
   while (!samples_.empty() && now-samples_.front().time > 1.5) samples_.pop_front();
@@ -256,18 +350,29 @@ void VehicleTarget::update(const TargetSelection & selection,
       const auto position=muzzle_world+orientation*pose.translation_gimbal_m;
       const auto ray=orientation*(pose.translation_gimbal_m-pose_.translation_camera_to_gimbal);
       const double phase=std::atan2(board(1,2),board(0,2));
+      const auto noise=observation_noise(observation,pose,ray,phase,false,pose_.camera_matrix(0,0));
       double score=pose.reprojection_rms_px/pose_.max_reprojection_rms_px+tilt_error/0.35;
       int plate=0;
       if (seen_) {
         double best=std::numeric_limits<double>::infinity();
+        double second=best;
         for (int id=0;id<4;++id) {
-          const double distance=cv::norm(position-armor_position(0,id));
-          const double angle=std::abs(wrap(phase-x_[3]-id*quarter));
-          if (distance > 0.6 || angle > 0.9) continue;
-          const double error=distance/0.3+angle/0.25;
-          if (error < best) { best=error; plate=id; }
+          const auto predicted=armor_position(0,id);
+          const Eigen::Vector4d residual(position[0]-predicted[0],position[1]-predicted[1],
+            position[2]-predicted[2],wrap(phase-x_[3]-id*quarter));
+          const auto h=observation_jacobian(0,id);
+          Eigen::Matrix4d innovation=h*p_*h.transpose()+noise;
+          // Before a full fit, the center is conditional on a radius prior.
+          // Its orbit mismatch must not reject the very views that identify it.
+          if (!initialized_) innovation.topLeftCorner<3,3>().diagonal().array()+=0.04;
+          const auto decomposition=innovation.ldlt();
+          if (decomposition.info()!=Eigen::Success || !decomposition.isPositive()) continue;
+          const double error=residual.dot(decomposition.solve(residual));
+          if (error > 25 || std::abs(residual[3]) > 0.9 || cv::norm(position-predicted) > 1.5) continue;
+          if (error < best) { second=best; best=error; plate=id; }
+          else second=std::min(second,error);
         }
-        if (!std::isfinite(best)) continue;
+        if (!std::isfinite(best) || second-best < 1.0) continue;
         score += best;
       }
       auto associated=observation; associated.pose=pose;
@@ -293,8 +398,21 @@ void VehicleTarget::update(const TargetSelection & selection,
     if (!seen_) {
       x_ << candidate.position[0]-0.2*std::cos(candidate.phase),
         candidate.position[1]-0.2*std::sin(candidate.phase),candidate.position[2],candidate.phase,0,0.2,0,0;
-      p_.setZero(); p_.diagonal() << 1,1,0.1,0.1,25,0.04,0.04,0.04;
-    } else correct(candidate.position,candidate.phase,candidate.plate,noise);
+      // c = measured_point - r*normal. A radius prior must move the center
+      // with it, rather than inventing uncertainty in the observed plate.
+      Eigen::Matrix<double,8,4> transform = Eigen::Matrix<double,8,4>::Zero();
+      transform.topLeftCorner<3,3>().setIdentity(); transform(3,3)=1;
+      transform(0,3)=0.2*std::sin(candidate.phase);
+      transform(1,3)=-0.2*std::cos(candidate.phase);
+      p_ = transform*noise*transform.transpose();
+      State radius = State::Zero();
+      radius[0]=-std::cos(candidate.phase); radius[1]=-std::sin(candidate.phase); radius[5]=1;
+      p_ += 0.04*radius*radius.transpose();
+      p_(4,4)=25; p_(6,6)=p_(7,7)=0.04;
+      p_.diagonal().array() += 1e-8;
+    } else if (initialized_ && !correct(candidate.position,candidate.phase,candidate.plate,noise)) {
+      continue;
+    }
     if (!geometry_valid()) { reset(); diagnostics_.reset_reason="invalid_geometry"; return; }
     const double reference=samples_.empty() ? x_[3] : samples_.back().phase+x_[4]*(now-samples_.back().time);
     const double phase=reference+wrap(candidate.phase-candidate.plate*quarter-reference);
@@ -308,9 +426,23 @@ void VehicleTarget::update(const TargetSelection & selection,
   while (samples_.size()>256) samples_.pop_front();
   if (current_) {
     ++updates_; misses_=0;
+    if (!initialized_) fit_provisional(now);
     const bool fitted=fit(now);
     initialized_ = initialized_ || fitted;
   } else ++misses_;
+  if (updates_>=config_.min_confirmed_updates) recovery_started_.reset();
+  if (recovery_started_ && seconds(time,*recovery_started_)>0.5) {
+    reset(); diagnostics_.reset_reason="reconfirmation_failed";
+    return;
+  }
+  if (!current_ && seen_ && (seconds(time,*seen_) > 0.5 ||
+      (!initialized_ && misses_ >= config_.max_consecutive_misses)) &&
+      std::any_of(selection.observations.begin(),selection.observations.end(),
+        [](const auto & observation) { return observation.eligible; })) {
+    // Sustained disagreement (including an actual speed change) must eventually
+    // release a confident old prior. Never refresh it from rejected observations.
+    reset(); diagnostics_.reset_reason="persistent_inconsistency";
+  }
 }
 
 double VehicleTarget::prediction_seconds(std::chrono::steady_clock::time_point time) const
@@ -338,7 +470,7 @@ TargetTrackEstimate VehicleTarget::estimate(std::chrono::steady_clock::time_poin
   result.last_observation=observation_; result.has_last_measurement=true;
   result.has_current_measurement=current_;
   if (current_) result.current_observation=observation_;
-  const bool ready=initialized_ && updates_>=config_.min_confirmed_updates;
+  const bool ready=updates_>=config_.min_confirmed_updates;
   result.state=ready ? (current_ ? TargetTrackState::tracking : TargetTrackState::temporarily_lost) : TargetTrackState::detecting;
   result.prediction_valid=result.velocity_valid=ready;
   result.status=!ready ? "follow_collecting_geometry" : (current_ ? "follow_ekf_tracking" : "follow_ekf_coasting");
@@ -351,6 +483,9 @@ TargetTrackEstimate VehicleTarget::estimate(std::chrono::steady_clock::time_poin
 
 int VehicleTarget::choose_plate(double dt, const cv::Vec3d & muzzle, int previous) const
 {
+  // Until geometry is observed, only the associated plate is supported. This is
+  // the same model and trajectory, not a separate static-target tracking mode.
+  if (!initialized_) return diagnostics_.associated_plate;
   const double facing=std::atan2(muzzle[1]-x_[1],muzzle[0]-x_[0]);
   const auto error=[&](int plate) { return wrap(x_[3]+x_[4]*dt+plate*quarter-facing); };
   // Separate exit/entry gates at IMPACT time. Once outgoing, prefer the adjacent

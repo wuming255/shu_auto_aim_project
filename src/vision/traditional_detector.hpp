@@ -39,6 +39,9 @@ struct TraditionalDetectorConfig        // 检测器配置文件
   double min_lightbar_ratio = 1.5;                  // 灯条的最小长宽比
   double max_lightbar_ratio = 20.0;                 // 灯条的最大长宽比
   double min_lightbar_length = 8.0;                 // 灯条最小长度
+  // A pixel occupies an area, whereas a contour traces pixel centers. Enabled
+  // only for the simulator's small rasterized lamps; real-camera baseline is opt-in.
+  bool compensate_lightbar_pixel_extent = false;
   // 中心距 / 平均灯长；含下界、不含上界，表示图像几何而非物理靶板类型。
   double min_armor_ratio = 0.8;
   double max_armor_ratio = 5.5;

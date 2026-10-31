@@ -57,7 +57,7 @@ public:
         "model_generation,model_ready,cx_m,cy_m,cz_m,radius_m,alternate_radius_m,alternate_height_m,phase_rad,omega_rad_s,"
         "omega_std_rad_s,associated_plate,aim_plate,selection_reason,reset_reason,observation_age_s,flight_time_s,"
         "prediction_lead_s,yaw_step_rad,fit_span_s,normal_span_rad,position_rms_m,phase_rms_rad,pose_ambiguous,fit_status,"
-        "normalized_position_error,normalized_phase_error,observed_x,observed_y,observed_z,observed_phase,fit_omega_rad_s,fit_omega_std_rad_s,fire_status\n";
+        "normalized_position_error,normalized_phase_error,observed_x,observed_y,observed_z,observed_phase,fit_omega_rad_s,fit_omega_std_rad_s,fire_status,model_reset_count,model_instance\n";
       command_log_ << std::setprecision(12);
     }
     if (max_frames_ < 0 || debug_every_ < 1 || !std::isfinite(idle_timeout_sec_) || idle_timeout_sec_ < 0) {
@@ -220,7 +220,8 @@ private:
         << std::quoted(model.fit_status) << ',' << model.normalized_position_error << ',' << model.normalized_phase_error << ','
         << model.observed_position_world_m[0] << ',' << model.observed_position_world_m[1] << ',' << model.observed_position_world_m[2] << ','
         << model.observed_phase_rad << ',' << model.fit_angular_velocity_rad_s << ',' << model.fit_omega_std_rad_s << ','
-        << std::quoted(control_->fire_status()) << '\n';
+        << std::quoted(control_->fire_status()) << ',' << model.reset_count << ','
+        << (control_->pose_config() ? control_->pose_config()->feature_size_m->width : 0) << '\n';
       if (!command_log_) throw std::runtime_error("cannot write simulator command log");
     }
   }
@@ -235,6 +236,7 @@ private:
     config.brightness_method = method == "max_channel" ? srm::vision::BrightnessMethod::max_channel
                                                        : srm::vision::BrightnessMethod::grayscale;
     config.brightness_threshold = declare_parameter<double>("brightness_threshold", 160.0);
+    config.compensate_lightbar_pixel_extent = declare_parameter<bool>("lightbar_pixel_extent", true);
     config.classifier.enabled = declare_parameter<bool>("classifier_enabled", true);
     config.classifier.model_path = declare_parameter<std::string>(
       "classifier_model", std::string(SRM_DEFAULT_NUMBER_MODEL_DIR) + "/mlp.onnx");
@@ -345,6 +347,7 @@ void usage()
     "  show_debug           true (q/Esc/Ctrl+C to quit; set false for headless)\n"
     "  brightness_method    max_channel (or grayscale)\n"
     "  brightness_threshold 160.0\n"
+    "  lightbar_pixel_extent true (pixel-area correction for small simulator lamps)\n"
     "  classifier_enabled   true\n"
     "  classifier_model / classifier_labels / classifier_confidence (default 0.7)\n"
     "  control_enabled      true (false restores recognition-only mode)\n"
@@ -352,6 +355,7 @@ void usage()
     "  command_topic        /vision_send_data (50 Hz; world gimbal angles in degrees)\n"
     "  aim_mode             follow (fixed-center eight-state EKF + intercept) or guard (rotation prediction/fixed guard)\n"
     "                       follow: fixed 25 m/s; coast/allow fire up to 150 ms after last accepted observation\n"
+    "                       observed plate can aim before full geometry; impact-point uncertainty is checked\n"
     "  enemy_color          blue (or red)\n"
     "  allow_visual_fire    true (simulator only; false disables simulated fire)\n"
     "  frame_max_age_sec / feedback_max_age_sec 0.25; pitch_limit_deg=45.0\n"

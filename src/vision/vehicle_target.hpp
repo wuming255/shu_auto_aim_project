@@ -20,6 +20,7 @@ struct VehicleTargetDiagnostics
   double normalized_position_error = 0, normalized_phase_error = 0;
   int associated_plate = -1;
   std::size_t generation = 0;
+  std::size_t reset_count = 0;
   bool initialized = false, pose_ambiguous = false;
   std::string reset_reason = "startup";
   std::string fit_status = "samples";
@@ -35,6 +36,9 @@ public:
     const cv::Matx33d & gimbal_to_world, const cv::Vec3d & muzzle_world);
   TargetTrackEstimate estimate(std::chrono::steady_clock::time_point time) const;
   cv::Vec3d armor_position(double dt, int plate) const;
+  // Output qualification uses the covariance of this point at impact, not full
+  // identifiability of the vehicle. The caller still enforces observation age.
+  bool point_prediction_valid(double dt, int plate, const cv::Vec3d & muzzle_world) const;
   int choose_plate(double dt, const cv::Vec3d & muzzle_world, int previous) const;
   double prediction_seconds(std::chrono::steady_clock::time_point time) const;
   VehicleTargetDiagnostics diagnostics(std::chrono::steady_clock::time_point time) const;
@@ -51,15 +55,17 @@ private:
     Eigen::Matrix4d noise;
   };
   void predict(double dt);
-  void correct(const cv::Vec3d & position, double phase, int plate, const Eigen::Matrix4d & noise);
+  Eigen::Matrix<double,4,8> observation_jacobian(double dt, int plate) const;
+  bool correct(const cv::Vec3d & position, double phase, int plate, const Eigen::Matrix4d & noise);
   bool fit(double now);
+  void fit_provisional(double now);
   bool geometry_valid() const;
   TargetTrackerConfig config_;
   PoseSolverConfig pose_;
   double mounting_tilt_;
   State x_ = State::Zero();
   Covariance p_ = Covariance::Identity();
-  std::optional<std::chrono::steady_clock::time_point> time_, seen_;
+  std::optional<std::chrono::steady_clock::time_point> time_, seen_, recovery_started_;
   std::optional<TargetObservation> observation_;
   std::size_t updates_ = 0, misses_ = 0;
   bool current_ = false;

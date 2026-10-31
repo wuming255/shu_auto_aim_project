@@ -201,6 +201,11 @@ void AutoAimPipeline::forecast_follow(AutoAimFrameResult & result,
     flight = next;
   }
   result.aim.total_prediction_lead_s = base+result.aim.flight_time_s;
+  if (!vehicle_target_.point_prediction_valid(base+result.aim.flight_time_s,plate,muzzle_world)) {
+    result.aim.valid = false;
+    result.aim.error = "follow_point_uncertain";
+    return;
+  }
   result.follow_plate = plate;
   result.tracking.predicted_yaw_rad = target.predicted_yaw_rad;
   result.tracking.predicted_pitch_rad = target.predicted_pitch_rad;

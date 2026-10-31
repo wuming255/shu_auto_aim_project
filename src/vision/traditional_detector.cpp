@@ -131,12 +131,18 @@ DetectionResult TraditionalDetector::detect(const cv::Mat & bgr_image) const
   for (const auto & contour : contours) {
     if (contour.size() < 5) continue;     // 轮廓点少于5个跳过
 
-    const auto rotated_rect = cv::minAreaRect(contour);
+    auto rotated_rect = cv::minAreaRect(contour);
+    if (config_.compensate_lightbar_pixel_extent) {
+      rotated_rect.size.width += 1.0F;
+      rotated_rect.size.height += 1.0F;
+    }
     auto lightbar = make_lightbar(rotated_rect, lightbar_id);     // 识别灯条的
     if (!valid_lightbar(lightbar)) continue;        // 判断灯条合理性的
     // 参考 FaterYU 2024 检测器的填充率筛选，使用连续轮廓面积避免小灯条像素计数偏大。
     const auto rect_area = static_cast<double>(rotated_rect.size.area());
-    if (rect_area <= 0.0 || cv::contourArea(contour) / rect_area < config_.min_lightbar_fill_ratio) {
+    const double contour_area=cv::contourArea(contour)+(config_.compensate_lightbar_pixel_extent ?
+      cv::arcLength(contour,true)*0.5+1 : 0);
+    if (rect_area <= 0.0 || contour_area / rect_area < config_.min_lightbar_fill_ratio) {
       continue;
     }
 
