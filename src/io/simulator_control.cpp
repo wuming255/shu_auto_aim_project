@@ -102,6 +102,7 @@ SimulatorControl::SimulatorControl(SimulatorControlConfig config)
 void SimulatorControl::reset_pipelines()
 {
   for (auto & pipeline : pipelines_) pipeline.reset();
+  pipeline_instances_.fill(0);
   invalidate_frame();
   selected_pose_.reset();
 }
@@ -222,6 +223,7 @@ void SimulatorControl::prepare_pipelines(
     config.rotation.mounting_tilt_rad = config_.mounting_tilt_rad;
     config.aim_compensator.additional_latency_seconds = config_.additional_latency_sec;
     pipelines_[type] = std::make_unique<control::AutoAimPipeline>(config);
+    pipeline_instances_[type] = ++next_pipeline_instance_;
   }
 }
 

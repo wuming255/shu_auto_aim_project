@@ -221,7 +221,7 @@ private:
         << model.observed_position_world_m[0] << ',' << model.observed_position_world_m[1] << ',' << model.observed_position_world_m[2] << ','
         << model.observed_phase_rad << ',' << model.fit_angular_velocity_rad_s << ',' << model.fit_omega_std_rad_s << ','
         << std::quoted(control_->fire_status()) << ',' << model.reset_count << ','
-        << (control_->pose_config() ? control_->pose_config()->feature_size_m->width : 0) << '\n';
+        << control_->model_instance() << '\n';
       if (!command_log_) throw std::runtime_error("cannot write simulator command log");
     }
   }

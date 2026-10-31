@@ -54,11 +54,15 @@ private:
     int plate;
     Eigen::Matrix4d noise;
   };
+  Covariance process_noise(double dt) const;
   void predict(double dt);
   Eigen::Matrix<double,4,8> observation_jacobian(double dt, int plate) const;
+  Eigen::Matrix<double,4,8> observation_jacobian(double dt, int plate, const State & state) const;
   bool correct(const cv::Vec3d & position, double phase, int plate, const Eigen::Matrix4d & noise);
   bool fit(double now);
   void fit_provisional(double now);
+  bool commit_state(const State & state, const Covariance & covariance);
+  bool state_valid(const State & state, const Covariance & covariance) const;
   bool geometry_valid() const;
   TargetTrackerConfig config_;
   PoseSolverConfig pose_;

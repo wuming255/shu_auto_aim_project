@@ -68,11 +68,9 @@ cv::Vec3d VehicleTarget::armor_position(double dt, int plate) const
   return {x_[0]+radius*std::cos(phase),x_[1]+radius*std::sin(phase),x_[2]+(alternate ? x_[7] : 0)};
 }
 
-void VehicleTarget::predict(double dt)
+VehicleTarget::Covariance VehicleTarget::process_noise(double dt) const
 {
-  auto f = Covariance::Identity().eval();
   auto q = Covariance::Zero().eval();
-  f(3,4) = dt;
   // Unknown, stable angular speed. Center/geometry are slowly corrected by vision,
   // with no translational-velocity states to extrapolate into the impact point.
   const double acceleration_variance = initialized_ ? 0.0025 : 4.0;
@@ -80,15 +78,26 @@ void VehicleTarget::predict(double dt)
   q(3,4) = q(4,3) = dt*dt*dt*acceleration_variance/2;
   q(4,4) = dt*dt*acceleration_variance;
   for (int i : {0,1,2,5,6,7}) q(i,i) = dt*1e-6;
+  return q;
+}
+
+void VehicleTarget::predict(double dt)
+{
+  auto f = Covariance::Identity().eval();
+  f(3,4) = dt;
   x_ = (f*x_).eval(); x_[3] = wrap(x_[3]);
-  p_ = (f*p_*f.transpose()+q).eval();
+  p_ = (f*p_*f.transpose()+process_noise(dt)).eval();
+  p_ = (0.5*(p_+p_.transpose())).eval();
 }
 
 Eigen::Matrix<double,4,8> VehicleTarget::observation_jacobian(double dt, int plate) const
+{ return observation_jacobian(dt,plate,x_); }
+
+Eigen::Matrix<double,4,8> VehicleTarget::observation_jacobian(double dt, int plate, const State & state) const
 {
   const bool alternate = plate%2;
-  const double angle = x_[3]+x_[4]*dt+plate*quarter;
-  const double radius = x_[5]+(alternate ? x_[6] : 0);
+  const double angle = state[3]+state[4]*dt+plate*quarter;
+  const double radius = state[5]+(alternate ? state[6] : 0);
   const double c = std::cos(angle), s = std::sin(angle);
   Eigen::Matrix<double,4,8> h = Eigen::Matrix<double,4,8>::Zero();
   h(0,0) = h(1,1) = h(2,2) = h(3,3) = 1;
@@ -103,10 +112,15 @@ bool VehicleTarget::point_prediction_valid(double dt, int plate, const cv::Vec3d
 {
   if (plate < 0 || plate >= 4 || !std::isfinite(dt) || dt < 0 || !geometry_valid()) return false;
   const auto h = observation_jacobian(dt,plate).topRows<3>().eval();
-  const Eigen::Matrix3d covariance = h*p_*h.transpose();
+  auto future_h = h;
+  future_h.col(4).setZero();
+  // h already propagates the current posterior to impact. Process noise is
+  // defined at that future state, so it uses the local (zero-dt) speed column.
+  Eigen::Matrix3d covariance = h*p_*h.transpose()+future_h*process_noise(dt)*future_h.transpose();
+  covariance = (0.5*(covariance+covariance.transpose())).eval();
   const auto point = armor_position(dt,plate)-muzzle;
   const double range = cv::norm(point);
-  if (!covariance.allFinite() || range < 1e-3) return false;
+  if (!covariance.allFinite() || !std::isfinite(range) || range < 1e-3) return false;
   const Eigen::Vector3d ray(point[0]/range,point[1]/range,point[2]/range);
   const Eigen::Matrix3d transverse = Eigen::Matrix3d::Identity()-ray*ray.transpose();
   const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigen(transverse*covariance*transverse);
@@ -125,17 +139,17 @@ bool VehicleTarget::correct(const cv::Vec3d & position, double phase, int plate,
   const Eigen::Vector4d residual(position[0]-predicted[0],position[1]-predicted[1],
     position[2]-predicted[2],wrap(phase-angle));
   const Eigen::Matrix4d innovation = h*p_*h.transpose()+noise;
+  if (!residual.allFinite() || !innovation.allFinite()) return false;
   const auto decomposition = innovation.ldlt();
-  if (decomposition.info() != Eigen::Success || !decomposition.isPositive() ||
-      residual.dot(decomposition.solve(residual)) > 25) return false;
+  if (decomposition.info() != Eigen::Success || !decomposition.isPositive()) return false;
+  const double normalized_error = residual.dot(decomposition.solve(residual));
+  if (!std::isfinite(normalized_error) || normalized_error > 25) return false;
   const Eigen::Matrix<double,8,4> k = decomposition.solve(h*p_).transpose();
-  const State previous_x = x_;
-  const Covariance previous_p = p_;
-  x_ += k*residual; x_[3] = wrap(x_[3]);
+  State state = x_+k*residual;
+  state[3] = wrap(state[3]);
   const Covariance a = Covariance::Identity()-k*h;
-  p_ = (a*p_*a.transpose()+k*noise*k.transpose()).eval();
-  if (!geometry_valid()) { x_=previous_x; p_=previous_p; return false; }
-  return true;
+  const Covariance covariance = a*p_*a.transpose()+k*noise*k.transpose();
+  return commit_state(state,covariance);
 }
 
 bool VehicleTarget::fit(double now)
@@ -156,8 +170,9 @@ bool VehicleTarget::fit(double now)
     const double dt=sample.time-now-mean_time,w=1/sample.noise(3,3);
     time_variance+=w*dt*dt; phase_covariance+=w*dt*(sample.phase-mean_phase);
   }
-  if (time_variance<1e-6) return false;
+  if (!std::isfinite(time_variance) || time_variance<1e-6) return false;
   const double omega=phase_covariance/time_variance,phase=mean_phase-omega*mean_time;
+  if (!std::isfinite(omega) || !std::isfinite(phase)) return false;
   Eigen::Matrix4d information = Eigen::Matrix4d::Zero();
   Eigen::Vector4d rhs = Eigen::Vector4d::Zero();
   double z_weight[2]{}, z_sum[2]{};
@@ -213,21 +228,28 @@ bool VehicleTarget::fit(double now)
   diagnostics_.fit_angular_velocity_rad_s = omega;
   diagnostics_.fit_omega_std_rad_s = std::sqrt(omega_variance);
   diagnostics_.fit_status = "fit_residual";
-  if (diagnostics_.normalized_position_error > 9 || diagnostics_.normalized_phase_error > 9 ||
+  if (!std::isfinite(diagnostics_.normalized_position_error) ||
+      !std::isfinite(diagnostics_.normalized_phase_error) || !std::isfinite(omega_variance) ||
+      diagnostics_.normalized_position_error > 9 || diagnostics_.normalized_phase_error > 9 ||
       omega_variance > 0.0225 || std::abs(omega) > config_.max_abs_angular_velocity_rad_s) return false;
   if (!initialized_) {
     // One batch initialization REPLACES the provisional filter. These same samples
     // are never fused again as independent EKF measurements.
-    x_ << geometry[0],geometry[1],z_sum[0]/z_weight[0],wrap(phase),omega,
+    State state;
+    state << geometry[0],geometry[1],z_sum[0]/z_weight[0],wrap(phase),omega,
       geometry[2],geometry[3]-geometry[2],z_sum[1]/z_weight[1]-z_sum[0]/z_weight[0];
-    p_.setZero();
     Eigen::Matrix<double,8,4> transform = Eigen::Matrix<double,8,4>::Zero();
     transform(0,0)=transform(1,1)=transform(5,2)=transform(6,3)=1; transform(6,2)=-1;
-    p_ = transform*geometry_covariance*transform.transpose();
-    p_(2,2)=1/z_weight[0]; p_(7,7)=1/z_weight[0]+1/z_weight[1]; p_(2,7)=p_(7,2)=-1/z_weight[0];
-    p_(3,3)=1/weight+mean_time*mean_time*omega_variance;
-    p_(4,4)=omega_variance; p_(3,4)=p_(4,3)=-mean_time*omega_variance;
-    p_.diagonal().array() += 1e-6;
+    Covariance covariance = transform*geometry_covariance*transform.transpose();
+    covariance(2,2)=1/z_weight[0]; covariance(7,7)=1/z_weight[0]+1/z_weight[1];
+    covariance(2,7)=covariance(7,2)=-1/z_weight[0];
+    covariance(3,3)=1/weight+mean_time*mean_time*omega_variance;
+    covariance(4,4)=omega_variance; covariance(3,4)=covariance(4,3)=-mean_time*omega_variance;
+    covariance.diagonal().array() += 1e-6;
+    if (!commit_state(state,covariance)) {
+      diagnostics_.fit_status = "invalid_posterior";
+      return false;
+    }
   }
   diagnostics_.fit_status = "consistent";
   return true;
@@ -250,9 +272,10 @@ void VehicleTarget::fit_provisional(double now)
     const double dt=sample.time-now-mean_time,w=1/sample.noise(3,3);
     variance+=w*dt*dt; covariance+=w*dt*(sample.phase-mean_phase);
   }
-  if (variance<1e-6) return;
+  if (!std::isfinite(variance) || variance<1e-6) return;
   const double omega=covariance/variance,phase=mean_phase-omega*mean_time;
-  if (!std::isfinite(omega) || std::abs(omega)>config_.max_abs_angular_velocity_rad_s) return;
+  if (!std::isfinite(omega) || !std::isfinite(phase) ||
+      std::abs(omega)>config_.max_abs_angular_velocity_rad_s) return;
   Eigen::Matrix2d information=Eigen::Matrix2d::Zero();
   Eigen::Vector2d rhs=Eigen::Vector2d::Zero();
   double z_weight[2]{},z_sum[2]{};
@@ -260,12 +283,12 @@ void VehicleTarget::fit_provisional(double now)
     const int group=sample.plate%2;
     const double angle=phase+omega*(sample.time-now)+sample.plate*quarter;
     const Eigen::Vector2d normal(std::cos(angle),std::sin(angle));
-    // Phase uncertainty is propagated below with its center correlation.
     const Eigen::Matrix2d noise=sample.noise.topLeftCorner<2,2>();
     // The provisional radius is deliberately uncertain. An anisotropic ray
     // intersection with a fixed radius would move the center meters in depth
     // to explain centimeters of orbit mismatch. Use scalar quality weights
-    // here and propagate the actual anisotropic noise of that weighted mean.
+    // for this center estimate; joint information below retains the geometry
+    // correlations and uses the actual anisotropic observation noise.
     const double position_weight=1/noise.trace();
     const Eigen::Matrix2d precision=Eigen::Matrix2d::Identity()*position_weight;
     information+=precision;
@@ -277,26 +300,44 @@ void VehicleTarget::fit_provisional(double now)
   if (!center.allFinite()) return;
   const double z0=z_weight[0]>0 ? z_sum[0]/z_weight[0] : z_sum[1]/z_weight[1];
   const double z1=z_weight[1]>0 ? z_sum[1]/z_weight[1] : z0;
-  x_ << center[0],center[1],z0,wrap(phase),omega,0.2,0,z1-z0;
+  State state;
+  state << center[0],center[1],z0,wrap(phase),omega,0.2,0,z1-z0;
   // Joint batch information retains all center/radius/phase correlations and
   // lets observed point motion constrain speed even when its normal is noisy.
   // Two independent radius priors (r and r+dr); an unseen height remains broad.
   Covariance joint=Covariance::Identity()*1e-8;
   joint(5,5)+=50; joint(5,6)=joint(6,5)=25; joint(6,6)+=25; joint(7,7)+=25;
   for (const auto & sample : samples_) {
-    const auto h=observation_jacobian(sample.time-now,sample.plate);
+    const auto h=observation_jacobian(sample.time-now,sample.plate,state);
     joint+=h.transpose()*sample.noise.ldlt().solve(h);
   }
-  p_=joint.ldlt().solve(Covariance::Identity());
-  p_.diagonal().array()+=1e-8;
+  if (!joint.allFinite()) return;
+  const auto decomposition = joint.ldlt();
+  if (decomposition.info()!=Eigen::Success || !decomposition.isPositive()) return;
+  Covariance posterior = decomposition.solve(Covariance::Identity());
+  posterior.diagonal().array()+=1e-8;
+  commit_state(state,posterior);
 }
 
-bool VehicleTarget::geometry_valid() const
+bool VehicleTarget::state_valid(const State & state, const Covariance & covariance) const
 {
-  return x_.allFinite() && p_.allFinite() && x_[5] > 0.03 && x_[5] < 1.0 &&
-    x_[5]+x_[6] > 0.03 && x_[5]+x_[6] < 1.0 &&
-    std::abs(x_[4]) <= config_.max_abs_angular_velocity_rad_s;
+  if (!state.allFinite() || !covariance.allFinite() || state[5] <= 0.03 || state[5] >= 1.0 ||
+      state[5]+state[6] <= 0.03 || state[5]+state[6] >= 1.0 ||
+      std::abs(state[4]) > config_.max_abs_angular_velocity_rad_s) return false;
+  const auto decomposition = covariance.ldlt();
+  return decomposition.info()==Eigen::Success && decomposition.isPositive();
 }
+
+bool VehicleTarget::commit_state(const State & state, const Covariance & covariance)
+{
+  const Covariance symmetric = 0.5*(covariance+covariance.transpose());
+  if (!state_valid(state,symmetric)) return false;
+  x_ = state;
+  p_ = symmetric;
+  return true;
+}
+
+bool VehicleTarget::geometry_valid() const { return state_valid(x_,p_); }
 
 void VehicleTarget::update(const TargetSelection & selection,
   std::chrono::steady_clock::time_point time, const cv::Matx33d & orientation,
@@ -368,7 +409,8 @@ void VehicleTarget::update(const TargetSelection & selection,
           const auto decomposition=innovation.ldlt();
           if (decomposition.info()!=Eigen::Success || !decomposition.isPositive()) continue;
           const double error=residual.dot(decomposition.solve(residual));
-          if (error > 25 || std::abs(residual[3]) > 0.9 || cv::norm(position-predicted) > 1.5) continue;
+          if (!std::isfinite(error) || error > 25 || std::abs(residual[3]) > 0.9 ||
+              cv::norm(position-predicted) > 1.5) continue;
           if (error < best) { second=best; best=error; plate=id; }
           else second=std::min(second,error);
         }

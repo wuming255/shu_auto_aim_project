@@ -58,6 +58,10 @@ public:
   std::uint64_t pipeline_frames() const noexcept { return pipeline_frames_; }
   std::uint64_t rejected_feedback() const noexcept { return rejected_feedback_; }
   std::uint64_t rejected_transforms() const noexcept { return rejected_transforms_; }
+  // Process-local identity of the selected pipeline. Each armor type retains
+  // its own identity across output expiry; recreation allocates new identities.
+  std::uint64_t model_instance() const noexcept
+  { return result_ && pipelines_[selected_type_] ? pipeline_instances_[selected_type_] : 0; }
   bool geometry_ready() const noexcept { return mount_.has_value(); }
 
 private:
@@ -78,6 +82,8 @@ private:
   std::deque<rm_interfaces::msg::VisionReceiveData> feedback_;
   std::deque<Geometry> geometry_;
   std::array<std::unique_ptr<control::AutoAimPipeline>, 2> pipelines_;
+  std::array<std::uint64_t, 2> pipeline_instances_{};
+  std::uint64_t next_pipeline_instance_ = 0;
   std::optional<cv::Matx33d> mount_;
   std::optional<cv::Vec3d> camera_from_muzzle_, guard_origin_;
   std::optional<control::AutoAimFrameResult> result_;
